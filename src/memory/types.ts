@@ -25,8 +25,11 @@ export interface Strategy {
   steps: StrategyStep[];
   totalDurationMs: number;
   successCount: number;
+  failCount: number;
   lastUsed: string;
   tags: string[];
+  /** Tool sequence fingerprint for O(1) exact lookup */
+  fingerprint: string;
 }
 
 export interface ErrorPattern {

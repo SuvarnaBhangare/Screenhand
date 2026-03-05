@@ -24,14 +24,17 @@ function makeAction(overrides: Partial<ActionEntry> = {}): ActionEntry {
 }
 
 function makeStrategy(overrides: Partial<Strategy> = {}): Strategy {
+  const steps = overrides.steps ?? [{ tool: "apps", params: {} }];
   return {
     id: "str_test" + Math.random().toString(36).slice(2, 6),
     task: "test task",
-    steps: [{ tool: "apps", params: {} }],
+    steps,
     totalDurationMs: 50,
     successCount: 1,
+    failCount: 0,
     lastUsed: new Date().toISOString(),
     tags: ["test"],
+    fingerprint: steps.map((s) => s.tool).join("→"),
     ...overrides,
   };
 }
@@ -180,6 +183,57 @@ describe("MemoryStore", () => {
       expect(stats.successRate).toBeCloseTo(2 / 3);
       expect(stats.topTools[0]!.tool).toBe("apps");
       expect(stats.topTools[0]!.count).toBe(2);
+    });
+  });
+
+  describe("fingerprint index", () => {
+    it("looks up strategy by fingerprint in O(1)", () => {
+      const s = makeStrategy({ task: "photo", steps: [{ tool: "apps", params: {} }, { tool: "focus", params: {} }] });
+      store.appendStrategy(s);
+
+      const found = store.lookupByFingerprint("apps→focus");
+      expect(found).not.toBeUndefined();
+      expect(found!.task).toBe("photo");
+    });
+
+    it("returns undefined for unknown fingerprint", () => {
+      expect(store.lookupByFingerprint("nonexistent→tools")).toBeUndefined();
+    });
+
+    it("rebuilds index on init from disk", async () => {
+      store.appendStrategy(makeStrategy({ task: "persisted", steps: [{ tool: "launch", params: {} }, { tool: "ui_press", params: {} }] }));
+      await waitForFlush();
+
+      const store2 = new MemoryStore(tmpDir);
+      store2.init();
+      const found = store2.lookupByFingerprint("launch→ui_press");
+      expect(found).not.toBeUndefined();
+      expect(found!.task).toBe("persisted");
+    });
+  });
+
+  describe("feedback loop", () => {
+    it("increments successCount on positive outcome", () => {
+      const s = makeStrategy({ task: "test feedback", steps: [{ tool: "apps", params: {} }] });
+      store.appendStrategy(s);
+
+      store.recordStrategyOutcome("apps", true);
+      const strategies = store.readStrategies();
+      expect(strategies[0]!.successCount).toBe(2);
+    });
+
+    it("increments failCount on negative outcome", () => {
+      const s = makeStrategy({ task: "test feedback", steps: [{ tool: "apps", params: {} }] });
+      store.appendStrategy(s);
+
+      store.recordStrategyOutcome("apps", false);
+      const strategies = store.readStrategies();
+      expect(strategies[0]!.failCount).toBe(1);
+    });
+
+    it("does nothing for unknown fingerprint", () => {
+      store.recordStrategyOutcome("unknown→fp", true);
+      expect(store.readStrategies()).toHaveLength(0);
     });
   });
 

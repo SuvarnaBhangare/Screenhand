@@ -15,7 +15,10 @@ export class RecallEngine {
     this.store = store;
   }
 
-  /** Find strategies matching a task description (~0ms, in-memory) */
+  /**
+   * Find strategies matching a task description (~0ms, in-memory).
+   * Strategies with high fail rates are penalized.
+   */
   recallStrategies(query: string, limit = 5): Array<Strategy & { score: number }> {
     const strategies = this.store.readStrategies();
     if (strategies.length === 0) return [];
@@ -52,7 +55,14 @@ export class RecallEngine {
 
       const successBoost = 1 + Math.log2(Math.max(1, s.successCount)) * 0.1;
 
-      const score = relevance * recency * successBoost;
+      // Penalty for strategies that have failed — reduces score proportionally
+      const failCount = s.failCount ?? 0;
+      const totalAttempts = s.successCount + failCount;
+      const reliabilityPenalty = totalAttempts > 0
+        ? s.successCount / totalAttempts
+        : 1;
+
+      const score = relevance * recency * successBoost * reliabilityPenalty;
       return { ...s, score };
     });
 
@@ -63,12 +73,25 @@ export class RecallEngine {
   }
 
   /**
+   * O(1) exact match by tool sequence fingerprint.
+   * Returns the strategy if found and it has a positive reliability score.
+   */
+  recallByFingerprint(tools: string[]): Strategy | null {
+    const fp = MemoryStore.makeFingerprint(tools);
+    const strategy = this.store.lookupByFingerprint(fp);
+    if (!strategy) return null;
+    // Skip strategies that fail more than they succeed
+    const failCount = strategy.failCount ?? 0;
+    if (failCount > strategy.successCount) return null;
+    return strategy;
+  }
+
+  /**
    * Quick error lookup for a tool — used by interceptor on every call (~0ms).
    * Returns the most relevant error pattern or null.
    */
   quickErrorCheck(tool: string): ErrorPattern | null {
     const errors = this.store.readErrors();
-    // Find the highest-occurrence error for this tool
     let best: ErrorPattern | null = null;
     for (const e of errors) {
       if (e.tool === tool && e.resolution) {
@@ -80,20 +103,28 @@ export class RecallEngine {
 
   /**
    * Quick strategy hint for a tool sequence — used by interceptor.
-   * Given recent tool names, find if we're partway through a known strategy.
-   * Returns the next suggested step or null.
+   * Tries fingerprint prefix match first (O(1)), then falls back to scan.
+   * Skips unreliable strategies (failCount > successCount).
    */
-  quickStrategyHint(recentTools: string[]): { strategy: Strategy; nextStep: Strategy["steps"][number] } | null {
+  quickStrategyHint(recentTools: string[]): { strategy: Strategy; nextStep: Strategy["steps"][number]; fingerprint: string } | null {
     if (recentTools.length === 0) return null;
+
     const strategies = this.store.readStrategies();
 
     for (const s of strategies) {
       if (s.steps.length <= recentTools.length) continue;
-      // Check if recent tools match the beginning of this strategy
+      // Skip unreliable strategies
+      const failCount = s.failCount ?? 0;
+      if (failCount > s.successCount) continue;
+
       const strategyToolPrefix = s.steps.slice(0, recentTools.length).map((st) => st.tool);
       const matches = recentTools.every((t, i) => t === strategyToolPrefix[i]);
       if (matches) {
-        return { strategy: s, nextStep: s.steps[recentTools.length]! };
+        return {
+          strategy: s,
+          nextStep: s.steps[recentTools.length]!,
+          fingerprint: s.fingerprint ?? MemoryStore.makeFingerprint(s.steps.map((st) => st.tool)),
+        };
       }
     }
     return null;

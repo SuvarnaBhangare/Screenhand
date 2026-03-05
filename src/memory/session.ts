@@ -9,6 +9,7 @@
 
 import type { ActionEntry, Strategy, StrategyStep } from "./types.js";
 import { MemoryStore } from "./store.js";
+import type { RecallEngine } from "./recall.js";
 
 const SESSION_GAP_MS = 60_000; // 60s gap = new session
 const MAX_BUFFER_SIZE = 100;
@@ -157,6 +158,7 @@ export class SessionTracker {
 
     const totalDurationMs = actions.reduce((sum, a) => sum + a.durationMs, 0);
     const tags = extractTags(task, steps);
+    const fingerprint = MemoryStore.makeFingerprint(steps.map((s) => s.tool));
 
     return {
       id: "str_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -164,8 +166,10 @@ export class SessionTracker {
       steps,
       totalDurationMs,
       successCount: 1,
+      failCount: 0,
       lastUsed: new Date().toISOString(),
       tags,
+      fingerprint,
     };
   }
 }

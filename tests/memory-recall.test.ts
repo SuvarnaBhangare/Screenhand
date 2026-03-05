@@ -21,15 +21,17 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function addStrategy(task: string, tools: string[], tags: string[] = []): void {
+function addStrategy(task: string, tools: string[], tags: string[] = [], overrides: Partial<{ successCount: number; failCount: number }> = {}): void {
   store.appendStrategy({
     id: "str_" + Math.random().toString(36).slice(2, 8),
     task,
     steps: tools.map((t) => ({ tool: t, params: {} })),
     totalDurationMs: 100,
-    successCount: 1,
+    successCount: overrides.successCount ?? 1,
+    failCount: overrides.failCount ?? 0,
     lastUsed: new Date().toISOString(),
     tags: tags.length > 0 ? tags : task.toLowerCase().split(/\W+/).filter((w) => w.length >= 3),
+    fingerprint: tools.join("→"),
   });
 }
 
@@ -78,6 +80,42 @@ describe("RecallEngine", () => {
     });
   });
 
+  describe("recallByFingerprint", () => {
+    it("returns null when no match", () => {
+      expect(recall.recallByFingerprint(["apps", "focus"])).toBeNull();
+    });
+
+    it("returns exact match by tool sequence", () => {
+      addStrategy("photo workflow", ["apps", "focus", "ui_press"]);
+      const result = recall.recallByFingerprint(["apps", "focus", "ui_press"]);
+      expect(result).not.toBeNull();
+      expect(result!.task).toBe("photo workflow");
+    });
+
+    it("skips strategies that fail more than succeed", () => {
+      addStrategy("unreliable", ["apps", "focus"], [], { successCount: 2, failCount: 5 });
+      expect(recall.recallByFingerprint(["apps", "focus"])).toBeNull();
+    });
+
+    it("returns strategy when failures are within tolerance", () => {
+      addStrategy("mostly works", ["apps", "focus"], [], { successCount: 5, failCount: 3 });
+      const result = recall.recallByFingerprint(["apps", "focus"]);
+      expect(result).not.toBeNull();
+    });
+  });
+
+  describe("reliability penalty in recallStrategies", () => {
+    it("penalizes strategies with high fail rates", () => {
+      addStrategy("reliable photo", ["apps", "focus", "ui_press"], ["photo"], { successCount: 10, failCount: 1 });
+      addStrategy("unreliable photo", ["launch", "ui_press"], ["photo"], { successCount: 2, failCount: 8 });
+
+      const results = recall.recallStrategies("photo");
+      expect(results.length).toBe(2);
+      // Reliable strategy should rank higher
+      expect(results[0]!.task).toBe("reliable photo");
+    });
+  });
+
   describe("quickErrorCheck", () => {
     it("returns null when no errors", () => {
       expect(recall.quickErrorCheck("launch")).toBeNull();
@@ -122,6 +160,12 @@ describe("RecallEngine", () => {
       const hint = recall.quickStrategyHint(["apps", "focus"]);
       expect(hint).not.toBeNull();
       expect(hint!.nextStep.tool).toBe("ui_press");
+      expect(hint!.fingerprint).toBe("apps→focus→ui_press");
+    });
+
+    it("skips unreliable strategies", () => {
+      addStrategy("bad workflow", ["apps", "focus", "ui_press"], [], { successCount: 1, failCount: 5 });
+      expect(recall.quickStrategyHint(["apps", "focus"])).toBeNull();
     });
 
     it("returns null when sequence doesn't match", () => {

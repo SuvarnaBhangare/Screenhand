@@ -18,6 +18,8 @@ export class MemoryStore {
   // ── in-memory caches ──
   private strategiesCache: Strategy[] = [];
   private errorsCache: ErrorPattern[] = [];
+  /** Fingerprint → Strategy index for O(1) exact lookup */
+  private fingerprintIndex = new Map<string, Strategy>();
   private actionCount = 0;
   private actionSuccessCount = 0;
   private toolCounts = new Map<string, number>();
@@ -34,6 +36,7 @@ export class MemoryStore {
     this.initialized = true;
     this.ensureDir();
     this.strategiesCache = this.readLinesSync<Strategy>("strategies.jsonl");
+    this.rebuildFingerprintIndex();
     this.errorsCache = this.readLinesSync<ErrorPattern>("errors.jsonl");
 
     // Build action stats from current actions file (without caching all entries)
@@ -126,27 +129,67 @@ export class MemoryStore {
     return this.readLinesSync<ActionEntry>("actions.jsonl");
   }
 
-  // ── strategies (cached) ────────────────────────
+  // ── strategies (cached + fingerprint indexed) ──
+
+  private rebuildFingerprintIndex(): void {
+    this.fingerprintIndex.clear();
+    for (const s of this.strategiesCache) {
+      if (s.fingerprint) {
+        this.fingerprintIndex.set(s.fingerprint, s);
+      }
+    }
+  }
 
   appendStrategy(strategy: Strategy): void {
+    // Ensure fingerprint exists
+    if (!strategy.fingerprint) {
+      strategy.fingerprint = MemoryStore.makeFingerprint(strategy.steps.map((s) => s.tool));
+    }
+
     const idx = this.strategiesCache.findIndex((s) => s.task === strategy.task);
     if (idx >= 0) {
       const old = this.strategiesCache[idx]!;
       this.strategiesCache[idx] = {
         ...strategy,
         successCount: old.successCount + 1,
+        failCount: old.failCount ?? 0,
         lastUsed: strategy.lastUsed,
       };
+      this.fingerprintIndex.set(strategy.fingerprint, this.strategiesCache[idx]!);
     } else {
       this.strategiesCache.push(strategy);
+      this.fingerprintIndex.set(strategy.fingerprint, strategy);
     }
-    // Async full rewrite (strategies file is small)
+    this.writeLinesAsync("strategies.jsonl", this.strategiesCache as unknown as Record<string, unknown>[]);
+  }
+
+  /** O(1) exact lookup by tool sequence fingerprint */
+  lookupByFingerprint(fingerprint: string): Strategy | undefined {
+    return this.fingerprintIndex.get(fingerprint);
+  }
+
+  /** Record that a recalled strategy succeeded or failed */
+  recordStrategyOutcome(fingerprint: string, success: boolean): void {
+    const strategy = this.fingerprintIndex.get(fingerprint);
+    if (!strategy) return;
+
+    if (success) {
+      strategy.successCount++;
+      strategy.lastUsed = new Date().toISOString();
+    } else {
+      strategy.failCount = (strategy.failCount ?? 0) + 1;
+    }
     this.writeLinesAsync("strategies.jsonl", this.strategiesCache as unknown as Record<string, unknown>[]);
   }
 
   /** Read from cache — ~0ms */
   readStrategies(): Strategy[] {
     return this.strategiesCache;
+  }
+
+  /** Generate a fingerprint from a tool sequence */
+  static makeFingerprint(tools: string[]): string {
+    return tools.join("→");
   }
 
   // ── errors (cached) ────────────────────────────
@@ -215,6 +258,7 @@ export class MemoryStore {
         this.toolCounts.clear();
       } else if (category === "strategies") {
         this.strategiesCache = [];
+        this.fingerprintIndex.clear();
       } else if (category === "errors") {
         this.errorsCache = [];
       }

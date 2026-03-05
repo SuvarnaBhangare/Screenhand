@@ -85,6 +85,9 @@ const recallEngine = new RecallEngine(memoryStore);
 // Skip logging for memory tools themselves
 const MEMORY_TOOLS = new Set(["memory_recall", "memory_save", "memory_errors", "memory_stats", "memory_clear"]);
 
+// Track the strategy we're currently following (for feedback loop)
+let activeStrategyFingerprint: string | null = null;
+
 // Intercept all tool registrations to auto-log + auto-recall
 const originalTool = server.tool.bind(server);
 type ToolArgs = Parameters<typeof server.tool>;
@@ -149,7 +152,21 @@ function extractText(result: any): string {
       const recentTools = sessionTracker.getRecentToolNames();
       const strategyHint = recallEngine.quickStrategyHint(recentTools);
       if (strategyHint) {
-        hints.push(`💡 Memory: This matches strategy "${strategyHint.strategy.task}". Next step: ${strategyHint.nextStep.tool}(${JSON.stringify(strategyHint.nextStep.params)})`);
+        activeStrategyFingerprint = strategyHint.fingerprint;
+        const nextParams = Object.keys(strategyHint.nextStep.params).length > 0
+          ? `(${JSON.stringify(strategyHint.nextStep.params)})`
+          : "";
+        hints.push(`💡 Memory: This matches strategy "${strategyHint.strategy.task}" (${strategyHint.strategy.successCount} wins, ${strategyHint.strategy.failCount ?? 0} fails). Next step: ${strategyHint.nextStep.tool}${nextParams}`);
+
+        // If this was the last step of the strategy, record success
+        if (recentTools.length === strategyHint.strategy.steps.length - 1) {
+          // Next call will be the final step — but this call completing means we're on track
+        }
+      } else if (activeStrategyFingerprint && recentTools.length > 0) {
+        // We were following a strategy but the sequence diverged — record success
+        // (the agent completed the strategy or went its own way after it)
+        memoryStore.recordStrategyOutcome(activeStrategyFingerprint, true);
+        activeStrategyFingerprint = null;
       }
 
       // Append hints to the response if any
@@ -182,6 +199,12 @@ function extractText(result: any): string {
       };
       memoryStore.appendAction(entry);    // non-blocking
       sessionTracker.recordAction(entry);  // in-memory only
+
+      // Record strategy failure if we were following one
+      if (activeStrategyFingerprint) {
+        memoryStore.recordStrategyOutcome(activeStrategyFingerprint, false);
+        activeStrategyFingerprint = null;
+      }
 
       // Record error pattern (updates cache + async write)
       const errorPattern: ErrorPattern = {
