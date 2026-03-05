@@ -959,6 +959,158 @@ server.tool("platform_guide", "Get automation guide for a platform (selectors, U
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
+server.tool("export_playbook", "Generate a playbook JSON from your session. Extracts URLs, selectors, errors+solutions from memory. Share the output with ScreenHand to help others automate this platform.", {
+  platform: z.string().describe("Platform name, e.g. 'linkedin', 'twitter'"),
+  domain: z.string().describe("Domain to filter actions by, e.g. 'linkedin.com'"),
+  description: z.string().optional().describe("Short description of the platform"),
+  tabId: z.string().optional().describe("Tab ID to scan current page for selectors"),
+}, async ({ platform, domain, description, tabId }) => {
+  // 1. Pull URLs and errors from memory store
+  const actions = memoryStore.readActions();
+  const errors = memoryStore.readErrors();
+  const strategies = memoryStore.readStrategies();
+
+  const domainLower = domain.toLowerCase();
+
+  // Extract unique URLs from actions that touched this domain
+  const urlSet = new Set<string>();
+  for (const a of actions) {
+    const params = a.params as Record<string, any> || {};
+    const url = params.url || "";
+    if (typeof url === "string" && url.toLowerCase().includes(domainLower)) {
+      urlSet.add(url);
+    }
+    const result = a.result || "";
+    const urlMatch = result.match(/https?:\/\/[^\s"]+/g);
+    if (urlMatch) {
+      for (const u of urlMatch) {
+        if (u.toLowerCase().includes(domainLower)) urlSet.add(u);
+      }
+    }
+  }
+
+  // Extract errors related to this domain's tools
+  const domainErrors: Array<{ error: string; tool: string; resolution: string | null; occurrences: number }> = [];
+  for (const e of errors) {
+    const params = e.params as Record<string, any> || {};
+    const url = params.url || params.selector || "";
+    const isRelevant = (typeof url === "string" && url.toLowerCase().includes(domainLower)) ||
+      actions.some(a => {
+        const ap = a.params as Record<string, any> || {};
+        return a.tool === e.tool && typeof ap.url === "string" && ap.url.toLowerCase().includes(domainLower);
+      });
+    if (isRelevant) {
+      domainErrors.push({
+        error: e.error,
+        tool: e.tool,
+        resolution: e.resolution,
+        occurrences: e.occurrences,
+      });
+    }
+  }
+
+  // Extract relevant strategies
+  const domainStrategies = strategies.filter(s =>
+    s.task.toLowerCase().includes(domainLower) ||
+    s.task.toLowerCase().includes(platform.toLowerCase()) ||
+    s.tags.some(t => t.toLowerCase().includes(platform.toLowerCase()))
+  );
+
+  // 2. Scan current page for selectors if tab is available
+  let pageSelectors: Record<string, string> = {};
+  if (tabId || true) {
+    try {
+      const { client } = await getCDPClient(tabId);
+      await client.Runtime.enable();
+      const scanResult = await client.Runtime.evaluate({
+        expression: `(() => {
+          const url = location.href;
+          if (!url.toLowerCase().includes(${JSON.stringify(domainLower)})) return { match: false, url };
+          const inputs = Array.from(document.querySelectorAll('input,select,textarea,button[type="submit"]'));
+          const selectors = {};
+          for (const el of inputs) {
+            const id = el.id;
+            const name = el.name || el.getAttribute('aria-label') || el.placeholder || el.type || el.tagName.toLowerCase();
+            const key = (id || name || '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+            if (!key) continue;
+            if (id) selectors[key] = '#' + id;
+            else if (el.name) selectors[key] = '[name="' + el.name + '"]';
+            else if (el.getAttribute('aria-label')) selectors[key] = '[aria-label="' + el.getAttribute('aria-label') + '"]';
+          }
+          return { match: true, url, selectors };
+        })()`,
+        returnByValue: true,
+      });
+      await client.close();
+      if (scanResult.result.value?.match) {
+        pageSelectors = scanResult.result.value.selectors || {};
+      }
+    } catch {
+      // No browser or wrong page — skip selector scan
+    }
+  }
+
+  // 3. Build playbook JSON
+  const playbook = {
+    platform: platform.toLowerCase(),
+    version: "1.0.0",
+    updated: new Date().toISOString().slice(0, 10),
+    description: description || `Automation playbook for ${platform}`,
+    urls: Object.fromEntries(
+      Array.from(urlSet).sort().map((u, i) => {
+        const urlObj = new URL(u);
+        const pathKey = urlObj.pathname.replace(/^\//, "").replace(/\//g, "_").replace(/[^a-zA-Z0-9_]/g, "") || "home";
+        return [pathKey, u];
+      })
+    ),
+    flows: {
+      discovered: {
+        steps: domainStrategies.length > 0
+          ? domainStrategies[0]!.steps.map((s: any) => `${s.tool}(${JSON.stringify(s.params)})`)
+          : ["No strategies recorded yet. Use the platform, then call export_playbook again."],
+        selectors: pageSelectors,
+      },
+    },
+    detection: {
+      is_logged_in: "// Add detection JS for logged-in state",
+    },
+    errors: domainErrors.map(e => ({
+      error: e.error,
+      context: `Tool: ${e.tool} (${e.occurrences}x)`,
+      solution: e.resolution || "No resolution recorded yet. Fix it and call memory_save.",
+      severity: e.occurrences >= 3 ? "high" : "medium",
+    })),
+    _meta: {
+      exported_from: "screenhand",
+      actions_count: actions.filter(a => {
+        const p = a.params as Record<string, any> || {};
+        return typeof p.url === "string" && p.url.toLowerCase().includes(domainLower);
+      }).length,
+      strategies_count: domainStrategies.length,
+    },
+  };
+
+  // 4. Save to playbooks dir
+  const outPath = path.resolve(playbooksDir, `${platform.toLowerCase()}.json`);
+  const exists = fs.existsSync(outPath);
+
+  if (!fs.existsSync(playbooksDir)) fs.mkdirSync(playbooksDir, { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify(playbook, null, 2));
+
+  return {
+    content: [{
+      type: "text",
+      text: `${exists ? "Updated" : "Created"} playbook: playbooks/${platform.toLowerCase()}.json\n\n` +
+        `URLs found: ${urlSet.size}\n` +
+        `Selectors found: ${Object.keys(pageSelectors).length}\n` +
+        `Errors documented: ${domainErrors.length}\n` +
+        `Strategies: ${domainStrategies.length}\n\n` +
+        `Share this file to help others automate ${platform}.\n\n` +
+        JSON.stringify(playbook, null, 2),
+    }],
+  };
+});
+
 // ═══════════════════════════════════════════════
 // APPLESCRIPT — control scriptable apps directly
 // ═══════════════════════════════════════════════

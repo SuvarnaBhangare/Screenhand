@@ -184,6 +184,7 @@ Pre-built automation knowledge for specific platforms — selectors, URLs, flows
 | Tool | What it does |
 |------|-------------|
 | `platform_guide` | Get automation guide for a platform (selectors, URLs, flows, errors+solutions) |
+| `export_playbook` | Auto-generate a playbook from your session. Share it to help others. |
 
 ```
 platform_guide({ platform: "devpost", section: "errors" })   # Just errors + solutions
@@ -192,7 +193,13 @@ platform_guide({ platform: "devpost", section: "flows" })     # Step-by-step wor
 platform_guide({ platform: "devpost" })                       # Full playbook
 ```
 
-Available platforms: `devpost`. Add more by creating JSON files in `playbooks/`.
+**Contributing playbooks:** After automating any site, run:
+```
+export_playbook({ platform: "twitter", domain: "twitter.com" })
+```
+This auto-extracts URLs, selectors, errors+solutions from your session and saves a ready-to-share `playbooks/twitter.json`.
+
+Available platforms: `devpost`. Add more by running `export_playbook` or creating JSON files in `playbooks/`.
 
 Zero performance cost — files only read when `platform_guide` is called.
 
