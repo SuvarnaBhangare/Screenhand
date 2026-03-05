@@ -1,0 +1,29 @@
+# ScreenHand
+
+> Give AI eyes and hands on your desktop.
+
+ScreenHand is an open-source MCP (Model Context Protocol) server that lets AI assistants like Claude see your screen, click buttons, type text, and control any application on macOS and Windows.
+
+## Key Facts
+
+- 30+ automation tools
+- ~50ms per UI action via native Accessibility APIs
+- ~10ms Chrome DevTools Protocol operations
+- ~600ms screenshot + OCR
+- Works with Claude Desktop, Claude Code, Cursor, Windsurf, OpenAI Codex CLI
+- MIT licensed, free and open-source
+- Runs entirely locally, no cloud dependency
+- Supports macOS 12+ and Windows 10 (1809+)
+- Built-in learning memory with O(1) recall
+- Anti-detection stealth mode for bot-protected sites
+- Platform playbooks with pre-built selectors and error solutions
+
+## Links
+
+- Website: https://screenhand.com
+- GitHub: https://github.com/manushi4/screenhand
+- npm: https://www.npmjs.com/package/screenhand
+
+## Built By
+
+Khushi Singhal / Clazro Technology Private Limited
