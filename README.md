@@ -171,17 +171,31 @@ ScreenHand exposes 25+ tools organized by category.
 |------|-------------|
 | `applescript` | Run any AppleScript command |
 
-### Memory (Learning)
+### Memory (Learning) — zero-config, zero-latency
+
+ScreenHand gets smarter every time you use it — **no manual setup needed**.
+
+**What happens automatically:**
+- Every tool call is logged (async, non-blocking — adds ~0ms to response time)
+- After 3+ consecutive successes, the winning sequence is saved as a reusable strategy
+- Known error patterns are tracked with resolutions (e.g. "launch times out → use focus() instead")
+- On every tool call, the response includes **auto-recall hints**:
+  - Error warnings if the tool has failed before
+  - Next-step suggestions if you're mid-way through a known strategy
+
+**How it works under the hood:**
+- Strategies and errors are cached in RAM at startup — all lookups are ~0ms
+- Disk writes use `fs.appendFile` (non-blocking) — never slows down tool calls
+- Data lives in `.screenhand/memory/` as JSONL (grep-friendly, no database)
+- Action log auto-rotates at 10 MB
 
 | Tool | What it does |
 |------|-------------|
-| `memory_recall` | Search past successful strategies by task description |
-| `memory_save` | Save the current session's actions as a reusable strategy |
-| `memory_errors` | View known error patterns and resolutions |
-| `memory_stats` | Show action counts, success rates, and disk usage |
-| `memory_clear` | Clear stored actions, strategies, or errors |
-
-ScreenHand automatically logs every tool call and remembers what worked. Over time it builds a library of strategies (successful action sequences) and error patterns (what goes wrong and how to fix it). Data is stored in `.screenhand/memory/` as JSONL files.
+| `memory_recall` | Explicitly search past strategies by task description |
+| `memory_save` | Manually save the current session (auto-save handles most cases) |
+| `memory_errors` | View all known error patterns and their resolutions |
+| `memory_stats` | Action counts, success rates, top tools, disk usage |
+| `memory_clear` | Clear actions, strategies, errors, or all data |
 
 ## How It Works
 
