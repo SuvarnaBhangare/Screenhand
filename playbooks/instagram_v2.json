@@ -1,15 +1,17 @@
 {
   "platform": "instagram",
   "playbook": "instagram_v2",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "updated": "2026-03-05",
-  "description": "Instagram Web automation playbook with verified selectors from a live logged-in session. v2.1: updated with field learnings on create flow, caption contenteditable, comment inconsistencies, and publish verification.",
+  "description": "Instagram Web automation playbook with verified selectors. v2.2: name change via Accounts Center, website field limitations, caption persistence issues, stronger publish verification.",
   "urls": {
     "home": "https://www.instagram.com/",
     "reels": "https://www.instagram.com/reels/",
     "messages": "https://www.instagram.com/direct/inbox/",
     "notifications": "https://www.instagram.com/notifications/",
-    "edit_profile": "https://www.instagram.com/accounts/edit/"
+    "edit_profile": "https://www.instagram.com/accounts/edit/",
+    "accounts_center": "https://accountscenter.instagram.com/",
+    "name_change": "https://accountscenter.instagram.com/profiles/{profile_id}/name/"
   },
   "selectors": {
     "navigation": {
@@ -74,10 +76,11 @@
       },
       "notes": [
         "CRITICAL: /create/select/ resolves to @create profile page — never use it as a URL.",
-        "Create trigger must be clicked precisely on the parent of svg[aria-label='New post']. Clicking broad containers won't open the composer.",
+        "Create trigger must be clicked precisely on the parent of svg[aria-label='New post']. Generic text click can hit wrong container.",
         "Two Next clicks are required: first for crop/filter, second to reach caption/share.",
         "Caption field can be either <textarea> or <div contenteditable> — automation must try both.",
-        "After clicking Share, verify publish by checking for post URL (/p/...) and rendered caption text. success=true alone is not reliable."
+        "Caption in web composer can fail to persist — always verify final post page content, not just dialog state.",
+        "PUBLISH VERIFICATION: (1) post URL must exist on profile page, (2) rendered caption text must match on the post page itself. Dialog-close or Share click alone is NOT reliable success criteria."
       ]
     },
     "reel_engagement": {
@@ -139,7 +142,8 @@
     "update_profile_settings": {
       "steps": [
         "Navigate to edit_profile URL.",
-        "Set settings.website and settings.bio.",
+        "Set settings.bio (reliable on web).",
+        "Website field may be blocked/limited in some UI variants — skip if not editable.",
         "Submit via settings.submit (type='submit')."
       ],
       "selectors": {
@@ -148,7 +152,29 @@
         "submit": "button[type='submit']"
       },
       "notes": [
-        "Verified on Edit profile page title: 'Edit profile • Instagram'."
+        "Verified on Edit profile page title: 'Edit profile • Instagram'.",
+        "Bio is reliably editable. Website field can be blocked/limited in this UI variant.",
+        "For name changes, use Accounts Center flow instead (see change_name flow)."
+      ]
+    },
+    "change_name": {
+      "steps": [
+        "Navigate to Accounts Center: https://accountscenter.instagram.com/",
+        "Go to /profiles/{profile_id}/name/",
+        "Update first name and/or last name fields.",
+        "Click Done/Save to confirm.",
+        "Name change is account-wide (applies to Instagram + Facebook if linked)."
+      ],
+      "selectors": {
+        "first_name": "input[name='firstName'], input[aria-label*='First' i]",
+        "last_name": "input[name='lastName'], input[aria-label*='Last' i]",
+        "done_button": "button (text=/^Done$/i), button (text=/^Save$/i)"
+      },
+      "notes": [
+        "Name cannot be changed from /accounts/edit/ — must go through Accounts Center.",
+        "Accounts Center is at accountscenter.instagram.com (separate subdomain).",
+        "Successfully used to change name to 'ScreenHand'.",
+        "Name changes may have cooldown limits — Instagram restricts frequent changes."
       ]
     }
   },
@@ -218,16 +244,36 @@
       "context": "Instagram obfuscates CSS class names — they change frequently",
       "solution": "Always use semantic selectors: aria-label, href routes, placeholder text, role attributes. These are stable across sessions.",
       "severity": "high"
+    },
+    {
+      "error": "Name cannot be changed from /accounts/edit/",
+      "context": "Web profile edit page does not expose name fields",
+      "solution": "Go to Accounts Center: accountscenter.instagram.com/profiles/{profile_id}/name/ — click Done to save. Works reliably.",
+      "severity": "medium"
+    },
+    {
+      "error": "Website field blocked or limited in web profile edit",
+      "context": "Some UI variants of /accounts/edit/ restrict the website input",
+      "solution": "Skip website if not editable. Bio is always reliable. Try again from mobile app if website is critical.",
+      "severity": "medium"
+    },
+    {
+      "error": "Caption does not persist after Share click",
+      "context": "Web composer caption can silently fail to save",
+      "solution": "After Share, navigate to the post URL on your profile and verify the rendered caption text matches. Re-edit if needed via post options.",
+      "severity": "high"
     }
   ],
   "best_practices": [
     "Always use aria-label and href selectors over class names — Instagram obfuscates classes.",
     "For create flow: home page → svg[aria-label='New post'] parent click → file input → Next → Next → caption → Share.",
     "Caption fields can be textarea or contenteditable — support both in automation.",
-    "Always verify post-action results (post URL, rendered text) — don't trust success flags alone.",
+    "Always verify post-action results: post URL on profile + rendered caption text on post page. Dialog-close/Share click is NOT enough.",
     "Comment submission: prefer Post button over Enter key; verify comment appeared in DOM.",
     "Use browser_stealth before any Instagram automation to hide webdriver flag.",
-    "Use browser_fill_form for typing (CDP keyboard events) — Instagram detects el.value= assignments."
+    "Use browser_fill_form for typing (CDP keyboard events) — Instagram detects el.value= assignments.",
+    "For name changes, use Accounts Center (accountscenter.instagram.com) — not /accounts/edit/.",
+    "Website field can be blocked in web UI — bio is always reliable."
   ],
   "verification": {
     "audit_date": "2026-03-05",
