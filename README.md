@@ -54,6 +54,21 @@ Add to your project `.mcp.json` or `~/.claude/settings.json`:
 }
 ```
 
+### OpenAI Codex CLI
+
+Add to `~/.codex/config.toml` (or `.codex/config.toml` in your project):
+
+```toml
+[mcp.desktop]
+command = "npx"
+args = ["tsx", "/path/to/desktop-automation/mcp-desktop.ts"]
+transport = "stdio"
+```
+
+### Any MCP client
+
+This is a standard MCP server over stdio. It works with any MCP-compatible client — just point it at `mcp-desktop.ts`.
+
 Replace `/path/to/desktop-automation` with the actual path where you cloned the repo.
 
 ## Tools
