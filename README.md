@@ -16,7 +16,7 @@ Claude can chain these tools together to automate complex workflows across multi
 ## Installation
 
 ```bash
-git clone https://github.com/khushi-singhal-06/desktop-automation.git
+git clone https://github.com/manushi4/desktop-automation.git
 cd desktop-automation
 npm install
 ```
