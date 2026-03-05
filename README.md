@@ -1,37 +1,32 @@
 # desktop-automation
 
-Control any macOS application via Accessibility APIs and Chrome via CDP — exposed as an MCP server so Claude can see and interact with your entire desktop.
+Give Claude eyes and hands on your Mac.
 
-## What it does
+An MCP server that lets Claude see your screen, click buttons, type text, control any app via Accessibility, automate Chrome, and run AppleScript — so it can do real work across your entire desktop.
 
-This is an MCP (Model Context Protocol) server that gives Claude the ability to:
+## What can Claude do with this?
 
-- **See your screen** — take screenshots, OCR text, read UI element trees
-- **Control any macOS app** — click buttons, type text, navigate menus, read UI state via Accessibility
-- **Automate Chrome** — open tabs, click elements, fill forms, run JavaScript, query the DOM
-- **Run AppleScript** — control Finder, Safari, Mail, Notes, and other scriptable apps
+- **Debug your app** — Claude reads the UI tree, clicks through flows, checks element states
+- **Inspect designs** — screenshots + OCR to read exactly what's on screen, pixel-level
+- **Automate Chrome** — fill forms, scrape data, run JS, navigate pages
+- **Cross-app workflows** — read from one app, paste into another, chain actions across your whole desktop
+- **Test UI flows** — click buttons, verify text appears, catch regressions
+- **Control native apps** — Finder, Notes, Mail, Xcode — anything with Accessibility or AppleScript support
 
-Claude can chain these tools together to automate complex workflows across multiple apps.
-
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/manushi4/desktop-automation.git
 cd desktop-automation
 npm install
+npm run build:native   # builds the native macOS Swift bridge
 ```
 
-Build the native macOS bridge (required for Accessibility features):
-
-```bash
-npm run build:native
-```
-
-## Setup
+Then add the MCP server to Claude.
 
 ### Claude Desktop
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -63,75 +58,83 @@ Replace `/path/to/desktop-automation` with the actual path where you cloned the 
 
 ## Tools
 
-### Screen & Vision
+### See the screen
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
-| `screenshot` | Take a screenshot and OCR it — returns all visible text |
-| `screenshot_file` | Take a screenshot and return the file path |
-| `ocr` | OCR a window with element positions (bounds, confidence) |
+| `screenshot` | Screenshot + OCR — returns all visible text |
+| `screenshot_file` | Screenshot saved to file (for viewing the image) |
+| `ocr` | OCR with element positions and bounds |
 
-### App Control (Accessibility)
+### Control any app (Accessibility)
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
-| `apps` | List all running applications with bundle IDs and PIDs |
-| `windows` | List all visible windows with IDs, positions, and sizes |
-| `focus` | Focus/activate an application |
-| `launch` | Launch an application |
-| `ui_tree` | Get the full UI element tree of an app (fast, no OCR) |
-| `ui_find` | Find a UI element by text/title |
-| `ui_press` | Find and press/click a UI element by title |
-| `ui_set_value` | Set the value of a UI element (text field, slider, etc.) |
-| `menu_click` | Click a menu item in an app's menu bar |
+| `apps` | List running apps with bundle IDs and PIDs |
+| `windows` | List visible windows with positions and sizes |
+| `focus` | Bring an app to the front |
+| `launch` | Launch an app |
+| `ui_tree` | Full UI element tree — instant, no OCR needed |
+| `ui_find` | Find a UI element by text or title |
+| `ui_press` | Click a UI element by its title |
+| `ui_set_value` | Set value of a text field, slider, etc. |
+| `menu_click` | Click a menu bar item |
 
-### Input
+### Keyboard & mouse
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
 | `click` | Click at screen coordinates |
-| `click_text` | Find text on screen via OCR and click it |
-| `type_text` | Type text using the keyboard |
-| `key` | Press a key combination (e.g. `cmd+s`) |
-| `drag` | Drag from one point to another |
+| `click_text` | Find text via OCR and click it |
+| `type_text` | Type text |
+| `key` | Key combo (e.g. `cmd+s`, `cmd+shift+z`) |
+| `drag` | Drag from point A to B |
 | `scroll` | Scroll at a position |
 
-### Chrome (CDP)
+### Chrome browser (CDP)
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
-| `browser_tabs` | List all open Chrome tabs |
-| `browser_open` | Open a URL in Chrome (new tab) |
-| `browser_navigate` | Navigate the active tab to a URL |
-| `browser_js` | Execute JavaScript in a Chrome tab |
-| `browser_dom` | Query the DOM with CSS selectors |
-| `browser_click` | Click an element by CSS selector |
+| `browser_tabs` | List open tabs |
+| `browser_open` | Open URL in new tab |
+| `browser_navigate` | Navigate active tab to URL |
+| `browser_js` | Run JavaScript in a tab |
+| `browser_dom` | Query DOM with CSS selectors |
+| `browser_click` | Click element by selector |
 | `browser_type` | Type into an input field |
-| `browser_wait` | Wait for a condition on a page |
-| `browser_page_info` | Get current page title, URL, and content summary |
+| `browser_wait` | Wait for a page condition |
+| `browser_page_info` | Get page title, URL, and content |
 
 ### AppleScript
 
-| Tool | Description |
+| Tool | What it does |
 |------|-------------|
-| `applescript` | Run an AppleScript command |
+| `applescript` | Run any AppleScript command |
 
 ## Requirements
 
-- **macOS** (uses Accessibility APIs and native Swift bridge)
-- **Node.js** 18+
-- **Accessibility permissions** — grant access to your terminal in System Settings > Privacy & Security > Accessibility
-- **Chrome with remote debugging** (for browser tools):
+- **macOS** — uses Accessibility APIs and a native Swift bridge
+- **Node.js 18+**
+- **Accessibility permissions** — System Settings > Privacy & Security > Accessibility > enable your terminal
+- **Chrome with remote debugging** (only for browser tools):
   ```bash
   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
   ```
 
+## How it works
+
+Three layers:
+
+1. **Native Swift bridge** — talks to macOS Accessibility APIs, CoreGraphics, and Vision framework (OCR)
+2. **TypeScript runtime** — CDP adapter for Chrome, AppleScript executor, coordinate mapping for Retina displays
+3. **MCP server** — exposes everything as tool calls that Claude can use directly
+
 ## Development
 
 ```bash
-npm run check       # Type-check
-npm run build       # Compile TypeScript
-npm run build:native # Build Swift bridge
+npm run check        # type-check
+npm run build        # compile TypeScript
+npm run build:native # build Swift bridge
 ```
 
 ## License
