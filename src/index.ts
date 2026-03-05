@@ -20,6 +20,7 @@ export { StateObserver } from "./runtime/state-observer.js";
 export { PlanningLoop } from "./runtime/planning-loop.js";
 export { AutomationRuntimeService } from "./runtime/service.js";
 export { MvpMcpServer } from "./mcp/server.js";
+export { createMcpStdioServer, startMcpStdioServer } from "./mcp/mcp-stdio-server.js";
 
 export interface RuntimeApp {
   runtime: AutomationRuntimeService;
