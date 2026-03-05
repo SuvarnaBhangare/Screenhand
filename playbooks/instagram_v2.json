@@ -1,9 +1,9 @@
 {
   "platform": "instagram",
   "playbook": "instagram_v2",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "updated": "2026-03-05",
-  "description": "Instagram Web automation playbook. v2.3: caption is contenteditable not textarea, .value= fails on Instagram, Done/Save can be div[role=button], photo upload flow, strict verification for posts+profile.",
+  "description": "Instagram Web automation playbook. v2.4: complete DM flow rewrite (profile Message → expand → contenteditable composer), 10 DM-specific issues documented, popup handling.",
   "urls": {
     "home": "https://www.instagram.com/",
     "reels": "https://www.instagram.com/reels/",
@@ -33,9 +33,14 @@
       "comment_input": "textarea[aria-label='Add a comment…'], textarea[placeholder='Add a comment…'], textarea[placeholder*='comment']"
     },
     "dm": {
+      "profile_message_button": "button (text=/^Message$/i) in profile header, div[role='button'] (text=/^Message$/i)",
+      "expand_chat": "button (text=/^Expand$/i), div[role='button'] (text=/^Expand$/i), [aria-label='Expand']",
+      "dismiss_popup": "button (text=/^Not Now$/i), div[role='button'] (text=/^Not Now$/i)",
+      "composer_primary": "div[contenteditable='true'][role='textbox']",
+      "composer_fallback": "textarea[placeholder*='Message']",
+      "send_button": "button (text=/^Send$/i), div[role='button'] (text=/^Send$/i)",
       "search_input": "input[name='searchInput'], input[placeholder='Search'], input[aria-label='Search input']",
-      "new_message": "a[href='/direct/new/'], [aria-label='New message'], button[aria-label='New message']",
-      "composer": "textarea[placeholder*='Message'], div[contenteditable='true'][role='textbox']"
+      "new_message": "a[href='/direct/new/'], [aria-label='New message'], button[aria-label='New message']"
     },
     "settings": {
       "website": "input[placeholder='Website']",
@@ -100,16 +105,38 @@
     },
     "dm_send_message": {
       "steps": [
-        "Navigate to messages URL.",
-        "Use dm.search_input to find recipient.",
-        "Click dm.new_message if inbox is empty.",
-        "Type in dm.composer — supports both textarea and contenteditable div."
+        "Navigate to target user's PROFILE page (not /direct/inbox/).",
+        "Click the Message button in profile HEADER — do NOT match generic 'Message' text (can hit sidebar nav).",
+        "Wait 2-3s for mini chat to open.",
+        "Dismiss any popup overlay ('Turn On Notifications' / 'Not Now') if present.",
+        "Click Expand/Open on the mini chat to get full DM thread.",
+        "Wait 1-2s for composer to appear after expand.",
+        "Type in composer — use div[contenteditable='true'][role='textbox'] (primary) or textarea (fallback).",
+        "Use browser_fill_form / CDP keyboard events for typing (NOT .value=).",
+        "Press Enter or click Send to submit.",
+        "VERIFY: check message appeared in thread DOM.",
+        "NOTE: some accounts are not DM-able due to privacy settings — skip and move on."
       ],
       "selectors": {
+        "profile_message_button": "button (text=/^Message$/i) inside profile header section, div[role='button'] (text=/^Message$/i)",
+        "expand_chat": "button (text=/^Expand$/i), div[role='button'] (text=/^Expand$/i), [aria-label='Expand']",
+        "dismiss_popup": "button (text=/^Not Now$/i), div[role='button'] (text=/^Not Now$/i)",
+        "composer_primary": "div[contenteditable='true'][role='textbox']",
+        "composer_fallback": "textarea[placeholder*='Message']",
+        "send_button": "button (text=/^Send$/i), div[role='button'] (text=/^Send$/i)",
         "search_input": "input[name='searchInput'], input[placeholder='Search'], input[aria-label='Search input']",
-        "new_message": "a[href='/direct/new/'], [aria-label='New message'], button[aria-label='New message']",
-        "composer": "textarea[placeholder*='Message'], div[contenteditable='true'][role='textbox']"
-      }
+        "new_message": "a[href='/direct/new/'], [aria-label='New message'], button[aria-label='New message']"
+      },
+      "notes": [
+        "CRITICAL: Do NOT use /direct/new/ as primary flow — recipient selection is unreliable. Go to profile and click Message instead.",
+        "Generic text match on 'Message' can hit sidebar Messages nav — target profile header Message button specifically.",
+        "Mini chat opens first; composer is NOT visible until you Expand the chat thread.",
+        "Popup overlays ('Turn On Notifications') can block composer — dismiss with 'Not Now' first.",
+        "Composer can be div[contenteditable] or textarea — support both, prefer contenteditable.",
+        "Add 2-3s waits after each step — DM UI has timing/race issues.",
+        "Some accounts don't expose DM (privacy/account settings) — detect 'message-button-missing' and skip.",
+        "Successfully sent 3 DMs after applying: profile header targeting + expand + longer waits + contenteditable support."
+      ]
     },
     "comment_on_post": {
       "steps": [
@@ -306,6 +333,48 @@
       "error": "Profile changes appear saved but not reflected on profile",
       "context": "Edit profile submit can succeed without changes persisting",
       "solution": "After saving, reload profile page and verify: rendered name, bio text, and profile photo src all match expected values.",
+      "severity": "high"
+    },
+    {
+      "error": "EPERM 127.0.0.1:9222 — Chrome CDP not available",
+      "context": "Chrome not launched with --remote-debugging-port",
+      "solution": "Launch Chrome with: --remote-debugging-port=9222. Ensure no other process holds that port.",
+      "severity": "critical"
+    },
+    {
+      "error": "Wrong 'Message' element clicked — hits sidebar nav instead of profile DM button",
+      "context": "Generic text match on 'Message' in page matches sidebar Messages link",
+      "solution": "Target Message button specifically within profile header context. Use positional/ancestor filtering, not global text match.",
+      "severity": "high"
+    },
+    {
+      "error": "Message button missing on profile — account not DM-able",
+      "context": "Some accounts have DM disabled via privacy/account settings",
+      "solution": "Detect missing Message button and skip that account. This is an Instagram restriction, not a bug.",
+      "severity": "medium"
+    },
+    {
+      "error": "DM composer missing after clicking Message",
+      "context": "Instagram opens mini chat first — composer not visible until expanded",
+      "solution": "After clicking Message, wait 2-3s, then click Expand/Open on the mini chat. Composer appears after expand. Add another 1-2s wait.",
+      "severity": "high"
+    },
+    {
+      "error": "Popup overlay blocks DM composer ('Turn On Notifications')",
+      "context": "Instagram shows notification prompts that cover the composer",
+      "solution": "Check for and dismiss 'Not Now' button before interacting with composer.",
+      "severity": "medium"
+    },
+    {
+      "error": "/direct/new/ recipient selection unreliable",
+      "context": "Navigating to /direct/new/ to start DM — recipient picker doesn't resolve",
+      "solution": "Do NOT use /direct/new/ as primary DM flow. Go to target user's profile page and click Message button instead.",
+      "severity": "high"
+    },
+    {
+      "error": "DM composer is contenteditable div, not textarea",
+      "context": "Attempting to type with .value= on DM composer",
+      "solution": "DM composer can be div[contenteditable='true'][role='textbox']. Use browser_fill_form / CDP keyboard events. Try contenteditable first, textarea as fallback.",
       "severity": "high"
     }
   ],
