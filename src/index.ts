@@ -15,7 +15,7 @@ export { AccessibilityAdapter } from "./runtime/accessibility-adapter.js";
 export { AppleScriptAdapter } from "./runtime/applescript-adapter.js";
 export { VisionAdapter } from "./runtime/vision-adapter.js";
 export { CompositeAdapter } from "./runtime/composite-adapter.js";
-export { MacOSBridgeClient } from "./native/macos-bridge-client.js";
+export { BridgeClient, BridgeClient as MacOSBridgeClient } from "./native/bridge-client.js";
 export { StateObserver } from "./runtime/state-observer.js";
 export { PlanningLoop } from "./runtime/planning-loop.js";
 export { AutomationRuntimeService } from "./runtime/service.js";

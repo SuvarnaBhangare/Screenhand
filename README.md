@@ -1,8 +1,8 @@
 # desktop-automation
 
-Give Claude eyes and hands on your Mac.
+Give Claude eyes and hands on your desktop.
 
-An MCP server that lets Claude see your screen, click buttons, type text, control any app via Accessibility, automate Chrome, and run AppleScript — so it can do real work across your entire desktop.
+An MCP server that lets Claude see your screen, click buttons, type text, control any app via Accessibility (macOS) or UI Automation (Windows), automate Chrome, and run AppleScript — so it can do real work across your entire desktop. Works on both macOS and Windows.
 
 ## What can Claude do with this?
 
@@ -143,7 +143,9 @@ Replace `/path/to/desktop-automation` with the actual path where you cloned the 
 
 ## Requirements
 
-- **macOS** — uses Accessibility APIs and a native Swift bridge
+### macOS
+
+- **macOS 12+** — uses Accessibility APIs and a native Swift bridge
 - **Node.js 18+**
 - **Accessibility permissions** — System Settings > Privacy & Security > Accessibility > enable your terminal
 - **Chrome with remote debugging** (only for browser tools):
@@ -151,13 +153,29 @@ Replace `/path/to/desktop-automation` with the actual path where you cloned the 
   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
   ```
 
+### Windows
+
+- **Windows 10 (1809+)** — uses UI Automation and a .NET 8 native bridge
+- **Node.js 18+**
+- **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** — for building the native bridge
+- No special permissions needed — UI Automation works without admin for most apps
+- **Chrome with remote debugging** (only for browser tools):
+  ```cmd
+  "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+  ```
+- Build the native bridge: `npm run build:native:windows`
+
 ## How it works
 
 Three layers:
 
-1. **Native Swift bridge** — talks to macOS Accessibility APIs, CoreGraphics, and Vision framework (OCR)
-2. **TypeScript runtime** — CDP adapter for Chrome, AppleScript executor, coordinate mapping for Retina displays
+1. **Native bridge** — talks to platform-specific APIs:
+   - **macOS**: Swift bridge using Accessibility APIs, CoreGraphics, and Vision framework (OCR)
+   - **Windows**: C# (.NET 8) bridge using UI Automation, SendInput, and Windows.Media.Ocr
+2. **TypeScript runtime** — platform detection, CDP adapter for Chrome, adapter routing, coordinate mapping
 3. **MCP server** — exposes everything as tool calls that Claude can use directly
+
+The bridge binary is auto-selected based on `process.platform`. Both bridges speak the same JSON-RPC-over-stdio protocol, so all MCP tools work identically on both platforms.
 
 ## Skills (slash commands)
 
@@ -191,7 +209,8 @@ Scan the QR code, then from your phone: `/desktop-automate open Chrome and go to
 ```bash
 npm run check        # type-check
 npm run build        # compile TypeScript
-npm run build:native # build Swift bridge
+npm run build:native # build Swift bridge (macOS)
+npm run build:native:windows  # build .NET bridge (Windows)
 ```
 
 ## License

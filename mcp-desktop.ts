@@ -22,11 +22,31 @@ import { z } from "zod";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
-import { MacOSBridgeClient } from "./src/native/macos-bridge-client.js";
+import fs from "node:fs";
+import { BridgeClient } from "./src/native/bridge-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const bridgePath = path.resolve(__dirname, "native/macos-bridge/.build/release/macos-bridge");
-const bridge = new MacOSBridgeClient(bridgePath);
+
+// ── Audit logging for dangerous tools ──
+const AUDIT_LOG_PATH = path.resolve(__dirname, ".audit-log.jsonl");
+
+function auditLog(tool: string, params: Record<string, unknown>) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    tool,
+    params,
+    pid: process.pid,
+  };
+  try {
+    fs.appendFileSync(AUDIT_LOG_PATH, JSON.stringify(entry) + "\n");
+  } catch {
+    // Non-critical — don't crash if log write fails
+  }
+}
+const bridgePath = process.platform === "win32"
+  ? path.resolve(__dirname, "native/windows-bridge/bin/Release/net8.0-windows/windows-bridge.exe")
+  : path.resolve(__dirname, "native/macos-bridge/.build/release/macos-bridge");
+const bridge = new BridgeClient(bridgePath);
 let bridgeReady = false;
 
 async function ensureBridge() {
@@ -347,10 +367,11 @@ server.tool("browser_navigate", "Navigate the active Chrome tab to a URL", {
   return { content: [{ type: "text", text: `Navigated to: ${title.result.value}` }] };
 });
 
-server.tool("browser_js", "Execute JavaScript in a Chrome tab. Returns the result. Use this for ANY dynamic web page interaction.", {
+server.tool("browser_js", "Execute JavaScript in a Chrome tab. Returns the result. WARNING: This runs arbitrary JS in the browser context — avoid on sensitive pages (banking, email). All executions are audit-logged.", {
   code: z.string().describe("JavaScript to execute. Must be an expression that returns a value. Use (() => { ... })() for multi-line."),
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
 }, async ({ code, tabId }) => {
+  auditLog("browser_js", { code: code.slice(0, 500), tabId });
   const { CDP: cdp, port } = await ensureCDP();
   let targetId = tabId;
   if (!targetId) {
@@ -535,9 +556,13 @@ server.tool("browser_page_info", "Get current page title, URL, and text content 
 // APPLESCRIPT — control scriptable apps directly
 // ═══════════════════════════════════════════════
 
-server.tool("applescript", "Run an AppleScript command. For controlling Finder, Safari, Mail, Notes, etc.", {
+server.tool("applescript", "Run an AppleScript command. For controlling Finder, Safari, Mail, Notes, etc. (macOS only). WARNING: Executes arbitrary AppleScript — can perform destructive actions (delete files, send emails). All executions are audit-logged.", {
   script: z.string().describe("AppleScript code to execute"),
 }, async ({ script }) => {
+  auditLog("applescript", { script: script.slice(0, 500) });
+  if (process.platform === "win32") {
+    return { content: [{ type: "text", text: "AppleScript is not supported on Windows. Use ui_tree, ui_press, and other accessibility tools instead." }] };
+  }
   try {
     const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
       encoding: "utf-8",

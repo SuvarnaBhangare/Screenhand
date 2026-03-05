@@ -18,14 +18,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "node:path";
-import { MacOSBridgeClient } from "./src/native/macos-bridge-client.js";
+import { BridgeClient } from "./src/native/bridge-client.js";
 
-const bridgePath = path.resolve(
-  import.meta.dirname ?? process.cwd(),
-  "native/macos-bridge/.build/release/macos-bridge"
-);
+const bridgePath = process.platform === "win32"
+  ? path.resolve(import.meta.dirname ?? process.cwd(), "native/windows-bridge/bin/Release/net8.0-windows/windows-bridge.exe")
+  : path.resolve(import.meta.dirname ?? process.cwd(), "native/macos-bridge/.build/release/macos-bridge");
 
-const bridge = new MacOSBridgeClient(bridgePath);
+const bridge = new BridgeClient(bridgePath);
 let bridgeReady = false;
 
 async function ensureBridge() {

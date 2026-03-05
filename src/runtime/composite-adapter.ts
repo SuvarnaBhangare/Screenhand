@@ -11,13 +11,15 @@ import type {
   WindowInfo,
 } from "../types.js";
 import type { AppAdapter } from "./app-adapter.js";
-import type { MacOSBridgeClient } from "../native/macos-bridge-client.js";
+import type { BridgeClient } from "../native/bridge-client.js";
+// Legacy alias for backward compatibility
+type MacOSBridgeClient = BridgeClient;
 import { AccessibilityAdapter } from "./accessibility-adapter.js";
 import { AppleScriptAdapter } from "./applescript-adapter.js";
 import { CdpChromeAdapter, type CdpChromeAdapterOptions } from "./cdp-chrome-adapter.js";
 import { VisionAdapter } from "./vision-adapter.js";
 
-/** Bundle IDs routed to CDP. */
+/** macOS bundle IDs routed to CDP. */
 const BROWSER_BUNDLES = new Set([
   "com.google.Chrome",
   "com.google.Chrome.canary",
@@ -26,6 +28,22 @@ const BROWSER_BUNDLES = new Set([
   "com.vivaldi.Vivaldi",
   "org.chromium.Chromium",
 ]);
+
+/** Windows process names routed to CDP. */
+const BROWSER_PROCESS_NAMES = new Set([
+  "chrome",
+  "chrome.exe",
+  "brave",
+  "brave.exe",
+  "msedge",
+  "msedge.exe",
+  "vivaldi",
+  "vivaldi.exe",
+  "chromium",
+  "chromium.exe",
+]);
+
+const isWindows = process.platform === "win32";
 
 interface SessionRouting {
   adapter: AppAdapter;
@@ -204,15 +222,29 @@ export class CompositeAdapter implements AppAdapter {
     let adapter: AppAdapter;
     let adapterName: string;
 
-    if (BROWSER_BUNDLES.has(bundleId)) {
-      adapter = this.cdp;
-      adapterName = "cdp";
-    } else if (AppleScriptAdapter.isScriptable(bundleId)) {
-      adapter = this.applescript;
-      adapterName = "applescript";
+    if (isWindows) {
+      // On Windows: route by process name
+      const processName = bundleId.toLowerCase().replace(/\.exe$/, "");
+      if (BROWSER_PROCESS_NAMES.has(processName) || BROWSER_PROCESS_NAMES.has(bundleId.toLowerCase())) {
+        adapter = this.cdp;
+        adapterName = "cdp";
+      } else {
+        // No AppleScript on Windows — always use accessibility (UI Automation)
+        adapter = this.accessibility;
+        adapterName = "accessibility";
+      }
     } else {
-      adapter = this.accessibility;
-      adapterName = "accessibility";
+      // On macOS: route by bundle ID
+      if (BROWSER_BUNDLES.has(bundleId)) {
+        adapter = this.cdp;
+        adapterName = "cdp";
+      } else if (AppleScriptAdapter.isScriptable(bundleId)) {
+        adapter = this.applescript;
+        adapterName = "applescript";
+      } else {
+        adapter = this.accessibility;
+        adapterName = "accessibility";
+      }
     }
 
     this.sessionRouting.set(sessionId, { adapter, adapterName });
