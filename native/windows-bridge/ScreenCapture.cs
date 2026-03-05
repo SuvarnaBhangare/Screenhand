@@ -63,7 +63,7 @@ class ScreenCapture
     private const uint SRCCOPY = 0x00CC0020;
     private const uint PW_RENDERFULLCONTENT = 0x00000002;
 
-    private static readonly string _tempDir = Path.Combine(Path.GetTempPath(), "desktop-automation");
+    private static readonly string _tempDir = Path.Combine(Path.GetTempPath(), "screenhand");
 
     static ScreenCapture()
     {

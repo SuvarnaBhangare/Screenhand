@@ -1,14 +1,14 @@
 #!/usr/bin/env npx tsx
 /**
- * MCP Server — exposes the macOS native bridge as MCP tools.
+ * ScreenHand Bridge — exposes the native bridge as MCP tools.
  * Claude Code can call these directly as tool calls — no API key needed.
  *
  * Add to .claude/settings.json:
  * {
  *   "mcpServers": {
- *     "desktop": {
+ *     "screenhand": {
  *       "command": "npx",
- *       "args": ["tsx", "/path/to/desktop-automation/mcp-bridge.ts"]
+ *       "args": ["tsx", "/path/to/screenhand/mcp-bridge.ts"]
  *     }
  *   }
  * }
@@ -35,7 +35,7 @@ async function ensureBridge() {
 }
 
 const server = new McpServer({
-  name: "desktop-automation",
+  name: "screenhand",
   version: "1.0.0",
 });
 

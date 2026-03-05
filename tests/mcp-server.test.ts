@@ -82,7 +82,7 @@ describe("MCP server startup", () => {
     const initResponse = responses.find((r) => r.id === 1);
     expect(initResponse).toBeDefined();
     expect(initResponse.result).toBeDefined();
-    expect(initResponse.result.serverInfo.name).toBe("desktop-automation");
+    expect(initResponse.result.serverInfo.name).toBe("screenhand");
 
     // Second response: tools/list
     const toolsResponse = responses.find((r) => r.id === 2);

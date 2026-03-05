@@ -1,6 +1,6 @@
-# Desktop Automation MCP — Usage Guide
+# ScreenHand MCP — Usage Guide
 
-You have access to a desktop automation MCP server that can control any macOS application and Chrome browser. Use it for app debugging, design inspection, UI testing, and automation.
+You have access to the ScreenHand MCP server that can control any macOS/Windows application and Chrome browser. Use it for app debugging, design inspection, UI testing, and automation.
 
 ## Quick Reference
 

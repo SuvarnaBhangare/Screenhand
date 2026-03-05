@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install desktop-automation skills globally for Claude Code
+# Install ScreenHand skills globally for Claude Code
 # Usage: ./install-skills.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

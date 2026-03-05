@@ -1,16 +1,14 @@
 #!/usr/bin/env npx tsx
 /**
- * Desktop Automation MCP Server
- * Controls any macOS app + Chrome browser via CDP.
- *
- * For app debugging, design inspection, UI testing.
+ * ScreenHand — MCP Server for Desktop Automation
+ * Controls any macOS/Windows app + Chrome browser via CDP.
  *
  * Setup — add to ~/.claude/settings.json or project .mcp.json:
  * {
  *   "mcpServers": {
- *     "desktop": {
+ *     "screenhand": {
  *       "command": "npx",
- *       "args": ["tsx", "/path/to/desktop-automation/mcp-desktop.ts"]
+ *       "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
  *     }
  *   }
  * }
@@ -69,7 +67,7 @@ async function ensureCDP(): Promise<{ CDP: any; port: number }> {
   throw new Error("Chrome not running with --remote-debugging-port. Launch with: /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug");
 }
 
-const server = new McpServer({ name: "desktop-automation", version: "2.0.0" });
+const server = new McpServer({ name: "screenhand", version: "2.0.0" });
 
 // ═══════════════════════════════════════════════
 // APPS — discover and manage running applications

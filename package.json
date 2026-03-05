@@ -1,7 +1,8 @@
 {
-  "name": "desktop-automation",
+  "name": "screenhand",
   "version": "0.1.0",
-  "description": "Control any macOS or Windows app via Accessibility/UI Automation + Chrome via CDP, exposed as an MCP server for Claude",
+  "description": "Give AI eyes and hands on your desktop. ScreenHand is an open-source MCP server that lets Claude and other AI agents see your screen, click buttons, type text, and control any app on macOS and Windows.",
+  "homepage": "https://screenhand.com",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -15,19 +16,34 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/manushi4/desktop-automation"
+    "url": "https://github.com/manushi4/screenhand"
+  },
+  "bugs": {
+    "url": "https://github.com/manushi4/screenhand/issues"
   },
   "author": "Khushi Singhal",
   "license": "MIT",
   "keywords": [
+    "screenhand",
     "mcp",
-    "macos",
-    "automation",
+    "mcp-server",
+    "model-context-protocol",
+    "desktop-automation",
+    "ui-automation",
     "accessibility",
-    "cdp",
-    "chrome",
+    "macos",
+    "windows",
     "claude",
-    "desktop"
+    "ai-agent",
+    "ai-tools",
+    "screen-control",
+    "browser-automation",
+    "cdp",
+    "chrome-devtools-protocol",
+    "rpa",
+    "ui-testing",
+    "ocr",
+    "computer-use"
   ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
