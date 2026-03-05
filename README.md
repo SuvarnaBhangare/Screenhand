@@ -367,6 +367,6 @@ MIT
 
 <div align="center">
 
-**[screenhand.com](https://screenhand.com)** | Built by [Khushi Singhal](https://github.com/manushi4)
+**[screenhand.com](https://screenhand.com)** | Built by [Khushi Singhal](https://github.com/manushi4) | A product of **Clazro Technology Private Limited**
 
 </div>
