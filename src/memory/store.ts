@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ActionEntry, Strategy, ErrorPattern, MemoryStats } from "./types.js";
+import { SEED_STRATEGIES } from "./seeds.js";
 
 const MAX_ACTION_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_STRATEGIES = 500;
@@ -29,6 +30,8 @@ export class MemoryStore {
   private toolCounts = new Map<string, number>();
   private initialized = false;
   private dirCreated = false;
+  /** True if ensureDir() had to create the memory directory (first boot) */
+  private justCreatedDir = false;
 
   // ── write buffer for flush-on-exit ──
   private pendingActionWrites: string[] = [];
@@ -53,7 +56,13 @@ export class MemoryStore {
     this.acquireLock();
     this.registerExitHandler();
 
+    // Detect first boot: memory directory was just created (didn't exist before ensureDir)
+    const isFirstBoot = this.justCreatedDir;
     this.strategiesCache = this.readLinesSafe<Strategy>("strategies.jsonl");
+    if (this.strategiesCache.length === 0 && isFirstBoot) {
+      for (const s of SEED_STRATEGIES) this.strategiesCache.push(s);
+      this.writeLinesAsync("strategies.jsonl", this.strategiesCache as unknown as Record<string, unknown>[]);
+    }
     this.enforceStrategyLimit();
     this.rebuildFingerprintIndex();
     this.errorsCache = this.readLinesSafe<ErrorPattern>("errors.jsonl");
@@ -147,6 +156,7 @@ export class MemoryStore {
     if (!this.dirCreated) {
       if (!fs.existsSync(this.dir)) {
         fs.mkdirSync(this.dir, { recursive: true });
+        this.justCreatedDir = true;
       }
       this.dirCreated = true;
     }

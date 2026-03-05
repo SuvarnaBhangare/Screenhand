@@ -26,6 +26,7 @@ import { MemoryStore } from "./src/memory/store.js";
 import { SessionTracker } from "./src/memory/session.js";
 import { RecallEngine } from "./src/memory/recall.js";
 import type { ActionEntry, ErrorPattern } from "./src/memory/types.js";
+import { backgroundResearch } from "./src/memory/research.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -214,6 +215,16 @@ function extractText(result: any): string {
         lastSeen: new Date().toISOString(),
       };
       memoryStore.appendError(errorPattern);
+
+      // Background research: search for a fix if no resolution exists
+      const existingErrors = memoryStore.readErrors();
+      const hasResolution = existingErrors.some(
+        (e) => e.tool === toolName && e.error === errorMsg && e.resolution
+      );
+      if (!hasResolution) {
+        backgroundResearch(memoryStore, toolName, safeParams, errorMsg);
+      }
+
       throw err;
     }
   };

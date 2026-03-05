@@ -12,6 +12,8 @@ let recall: RecallEngine;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "screenhand-recall-"));
+  // Pre-create memory dir so seeds don't auto-load (not first boot)
+  fs.mkdirSync(path.join(tmpDir, ".screenhand", "memory"), { recursive: true });
   store = new MemoryStore(tmpDir);
   store.init();
   recall = new RecallEngine(store);
