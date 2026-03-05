@@ -129,6 +129,33 @@ Three layers:
 2. **TypeScript runtime** — CDP adapter for Chrome, AppleScript executor, coordinate mapping for Retina displays
 3. **MCP server** — exposes everything as tool calls that Claude can use directly
 
+## Skills (slash commands)
+
+The repo ships with Claude Code skills — slash commands you can use in any session.
+
+**In this project** they work automatically:
+- `/screenshot` — capture your screen and describe what's visible
+- `/debug-ui` — inspect the UI tree of any app (e.g. `/debug-ui Xcode`)
+- `/automate` — describe a task and Claude does it (e.g. `/automate open Notes and create a new note titled "Hello"`)
+
+**Install globally** so they work in any project:
+
+```bash
+./install-skills.sh
+```
+
+This copies the skills to `~/.claude/commands/` as `/desktop-screenshot`, `/desktop-debug-ui`, and `/desktop-automate`.
+
+### Remote Control
+
+Pair with [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) to run these from your phone:
+
+```bash
+claude remote-control --name "Desktop Automation"
+```
+
+Scan the QR code, then from your phone: `/desktop-automate open Chrome and go to github.com`
+
 ## Development
 
 ```bash
