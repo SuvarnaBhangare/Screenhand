@@ -61,7 +61,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/src/mcp-entry.ts"]
     }
   }
 }
@@ -76,7 +76,7 @@ Add to your project `.mcp.json` or `~/.claude/settings.json`:
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/src/mcp-entry.ts"]
     }
   }
 }
@@ -91,7 +91,7 @@ Add to `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for global):
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/src/mcp-entry.ts"]
     }
   }
 }
@@ -104,13 +104,13 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp.screenhand]
 command = "npx"
-args = ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
+args = ["tsx", "/path/to/screenhand/src/mcp-entry.ts"]
 transport = "stdio"
 ```
 
 ### Any MCP Client
 
-ScreenHand is a standard MCP server over stdio. It works with any MCP-compatible client — just point it at `mcp-desktop.ts`.
+ScreenHand is a standard MCP server over stdio. It works with any MCP-compatible client — just point it at `src/mcp-entry.ts`.
 
 Replace `/path/to/screenhand` with the actual path where you cloned the repo.
 
