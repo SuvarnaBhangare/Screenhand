@@ -1299,10 +1299,21 @@ originalTool("session_release", "Release your session lease so other clients can
   return { content: [{ type: "text" as const, text: released ? `Session ${sessionId} released.` : `Session ${sessionId} not found.` }] };
 });
 
-originalTool("supervisor_status", "Get supervisor state — active sessions, health metrics, stall detection.", {}, async () => {
-  const state = supervisor.getState();
+originalTool("supervisor_status", "Get supervisor state — active sessions, health metrics, stall detection.", {
+  tail_log: z.number().optional().describe("Show last N lines of supervisor log (default: 0, max: 50)"),
+}, async ({ tail_log }) => {
+  // Try reading from daemon state file first, fall back to in-process supervisor
+  const { running: daemonRunning, pid: daemonPid } = isSupervisorDaemonRunning();
+  let state = supervisor.getState();
+
+  if (daemonRunning && fs.existsSync(SUPERVISOR_STATE_FILE)) {
+    try {
+      state = JSON.parse(fs.readFileSync(SUPERVISOR_STATE_FILE, "utf-8"));
+    } catch { /* use in-process state */ }
+  }
+
   const lines = [
-    `Supervisor: ${state.running ? "RUNNING" : "STANDBY"} (pid=${state.pid})`,
+    `Supervisor: ${daemonRunning ? "DAEMON RUNNING" : state.running ? "IN-PROCESS" : "STOPPED"} (pid=${daemonPid ?? state.pid})`,
     `Uptime: ${Math.round(state.health.uptimeMs / 60000)}m`,
     `Active sessions: ${state.health.activeSessions}`,
     `Total sessions: ${state.health.totalSessions}`,
@@ -1316,17 +1327,77 @@ originalTool("supervisor_status", "Get supervisor state — active sessions, hea
       lines.push(`  ${s.sessionId}: ${s.client.type} → ${s.app} (window=${s.windowId}, heartbeat=${s.lastHeartbeat})`);
     }
   }
+
+  if (tail_log && tail_log > 0) {
+    try {
+      const logContent = fs.readFileSync(SUPERVISOR_LOG_FILE, "utf-8");
+      const logLines = logContent.trim().split("\n").slice(-Math.min(tail_log, 50));
+      lines.push("", "--- Supervisor Log ---");
+      lines.push(logLines.join("\n"));
+    } catch {
+      lines.push("\n(no log file found)");
+    }
+  }
+
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });
 
-originalTool("supervisor_start", "Start the supervisor's background poll loop for stall detection and auto-recovery.", {}, async () => {
-  await supervisor.start();
-  return { content: [{ type: "text" as const, text: "Supervisor started. Monitoring active sessions for stalls." }] };
+const SUPERVISOR_PID_FILE = path.join(os.homedir(), ".screenhand", "supervisor", "supervisor.pid");
+const SUPERVISOR_STATE_FILE = path.join(os.homedir(), ".screenhand", "supervisor", "state.json");
+const SUPERVISOR_LOG_FILE = path.join(os.homedir(), ".screenhand", "supervisor", "supervisor.log");
+const SUPERVISOR_DAEMON_SCRIPT = path.resolve(__dirname, "scripts", "supervisor-daemon.ts");
+
+function isSupervisorDaemonRunning(): { running: boolean; pid: number | null } {
+  try {
+    if (!fs.existsSync(SUPERVISOR_PID_FILE)) return { running: false, pid: null };
+    const pid = Number(fs.readFileSync(SUPERVISOR_PID_FILE, "utf-8").trim());
+    process.kill(pid, 0);
+    return { running: true, pid };
+  } catch {
+    return { running: false, pid: null };
+  }
+}
+
+originalTool("supervisor_start", "Start the supervisor as a background daemon. Survives Claude Code restarts. Monitors sessions, detects stalls, executes recovery actions via native bridge.", {
+  pollMs: z.number().optional().describe("Poll interval in ms (default: 5000)"),
+  stallMs: z.number().optional().describe("Stall threshold in ms (default: 300000 = 5 min)"),
+}, async ({ pollMs, stallMs }) => {
+  const { running, pid } = isSupervisorDaemonRunning();
+  if (running) {
+    return { content: [{ type: "text" as const, text: `Supervisor daemon already running (pid=${pid}). Use supervisor_stop first.` }] };
+  }
+
+  const daemonArgs = ["tsx", SUPERVISOR_DAEMON_SCRIPT];
+  if (pollMs) daemonArgs.push("--poll", String(pollMs));
+  if (stallMs) daemonArgs.push("--stall", String(stallMs));
+
+  const child = spawn("npx", daemonArgs, {
+    detached: true,
+    stdio: "ignore",
+    cwd: __dirname,
+  });
+  child.unref();
+
+  const daemonPid = child.pid;
+  await new Promise((r) => setTimeout(r, 2000));
+
+  return { content: [{ type: "text" as const, text: `Supervisor daemon started (pid=${daemonPid}).\nPoll: ${pollMs ?? 5000}ms | Stall threshold: ${stallMs ?? 300000}ms\nLog: ${SUPERVISOR_LOG_FILE}\n\nThe daemon runs independently — survives Claude Code restarts.\nUse supervisor_status to check health.` }] };
 });
 
-originalTool("supervisor_stop", "Stop the supervisor's poll loop.", {}, async () => {
-  await supervisor.stop();
-  return { content: [{ type: "text" as const, text: "Supervisor stopped." }] };
+originalTool("supervisor_stop", "Stop the supervisor background daemon.", {}, async () => {
+  const { running, pid } = isSupervisorDaemonRunning();
+  if (!running) {
+    // Also stop in-process supervisor if it was started
+    await supervisor.stop();
+    return { content: [{ type: "text" as const, text: "No supervisor daemon running." }] };
+  }
+  try {
+    process.kill(pid!, "SIGTERM");
+    await new Promise((r) => setTimeout(r, 1000));
+    return { content: [{ type: "text" as const, text: `Supervisor daemon stopped (pid=${pid}).` }] };
+  } catch (err: any) {
+    return { content: [{ type: "text" as const, text: `Failed to stop: ${err.message}` }] };
+  }
 });
 
 originalTool("supervisor_pause", "Pause all automation — keeps leases but signals clients to stop acting.", {
@@ -1372,6 +1443,109 @@ originalTool("recovery_queue_list", "List recovery actions, optionally filtered 
     `${i + 1}. [${r.status.toUpperCase()}] ${r.type}: "${r.instruction.slice(0, 80)}"\n   Session: ${r.sessionId} | Created: ${r.createdAt}${r.result ? `\n   Result: ${r.result}` : ""}`
   ).join("\n\n");
   return { content: [{ type: "text" as const, text }] };
+});
+
+// ═══════════════════════════════════════════════
+// EXECUTION CONTRACT — canonical fallback chain
+// ═══════════════════════════════════════════════
+
+import {
+  EXECUTION_METHODS,
+  METHOD_CAPABILITIES,
+  DEFAULT_RETRY_POLICY,
+  planExecution,
+  executeWithFallback,
+} from "./src/runtime/execution-contract.js";
+import type { ExecutionMethod, ActionResult } from "./src/runtime/execution-contract.js";
+
+originalTool("execution_plan", "Show the execution plan for an action type. Returns the ordered fallback chain based on available infrastructure.", {
+  action: z.enum(["click", "type", "read", "locate"]).describe("Action type"),
+}, async ({ action }) => {
+  const plan = planExecution(action, { hasBridge: true, hasCDP: cdpPort !== null });
+  const lines = plan.map((method, i) => {
+    const cap = METHOD_CAPABILITIES[method];
+    return `${i + 1}. ${method} (~${cap.avgLatencyMs}ms)${i === 0 ? " ← primary" : ""}`;
+  });
+  lines.push("", `Retry policy: ${DEFAULT_RETRY_POLICY.maxRetriesPerMethod}/method, ${DEFAULT_RETRY_POLICY.maxTotalRetries} total, escalate after ${DEFAULT_RETRY_POLICY.escalateAfter}`);
+  return { content: [{ type: "text" as const, text: `Execution plan for "${action}":\n${lines.join("\n")}` }] };
+});
+
+originalTool("click_with_fallback", "Click a target using the canonical fallback chain: AX → CDP → OCR → coordinates. Automatically retries and falls through methods.", {
+  target: z.string().describe("Text, title, or identifier of the element to click"),
+  bundleId: z.string().optional().describe("App bundle ID (for AX path)"),
+}, async ({ target, bundleId }) => {
+  await ensureBridge();
+
+  const plan = planExecution("click", { hasBridge: true, hasCDP: cdpPort !== null });
+
+  const result = await executeWithFallback("click", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+    const start = Date.now();
+    try {
+      switch (method) {
+        case "ax": {
+          // Use ui_press (accessibility click by title)
+          const axResult = await bridge.call<any>("ax.pressElement", {
+            pid: 0, // frontmost
+            title: target,
+          });
+          return { ok: true, method, durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target };
+        }
+        case "cdp": {
+          if (!cdpPort) throw new Error("CDP not available");
+          const { CDP: CDPClient, port } = await ensureCDP();
+          const client = await CDPClient({ port });
+          try {
+            // Try clicking by text content
+            const { Runtime } = client;
+            const evalResult = await Runtime.evaluate({
+              expression: `(() => {
+                const el = Array.from(document.querySelectorAll('*')).find(e =>
+                  e.textContent?.trim() === ${JSON.stringify(target)} ||
+                  e.getAttribute('aria-label') === ${JSON.stringify(target)}
+                );
+                if (el) { el.click(); return 'clicked'; }
+                return null;
+              })()`,
+              returnByValue: true,
+            });
+            if (evalResult.result?.value === "clicked") {
+              return { ok: true, method, durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target };
+            }
+            throw new Error("Element not found via CDP");
+          } finally {
+            await client.close();
+          }
+        }
+        case "ocr": {
+          // OCR can locate but not click — locate then click at coordinates
+          const shot = await bridge.call<{ path: string }>("cg.captureWindow", { windowId: 0 });
+          const ocrResult = await bridge.call<any>("vision.ocrElements", { imagePath: shot.path });
+          const match = (ocrResult.elements || []).find((e: any) =>
+            (e.text || "").toLowerCase().includes(target.toLowerCase())
+          );
+          if (match && match.bounds) {
+            const x = match.bounds.x + match.bounds.width / 2;
+            const y = match.bounds.y + match.bounds.height / 2;
+            await bridge.call("cg.click", { x, y });
+            return { ok: true, method, durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target: `${target} at (${Math.round(x)},${Math.round(y)})` };
+          }
+          throw new Error("Target not found via OCR");
+        }
+        case "coordinates": {
+          throw new Error("Coordinates require explicit x,y — cannot auto-resolve from text");
+        }
+      }
+      throw new Error(`Unknown method: ${method}`);
+    } catch (err) {
+      return { ok: false, method, durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: err instanceof Error ? err.message : String(err), target };
+    }
+  });
+
+  if (result.ok) {
+    const fallbackNote = result.fallbackFrom ? ` (fell back from ${result.fallbackFrom})` : "";
+    return { content: [{ type: "text" as const, text: `Clicked "${result.target}" via ${result.method}${fallbackNote} in ${result.durationMs}ms` }] };
+  }
+  return { content: [{ type: "text" as const, text: `Failed to click "${target}" — all methods exhausted. Last error: ${result.error}` }] };
 });
 
 // ═══════════════════════════════════════════════
