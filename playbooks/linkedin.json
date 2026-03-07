@@ -1,0 +1,302 @@
+{
+  "id": "linkedin",
+  "name": "LinkedIn Automation",
+  "description": "Battle-tested playbook for LinkedIn browser automation via CDP. Covers posting, liking, commenting, connecting, messaging, search, and profile management.",
+  "platform": "linkedin",
+  "version": "1.0.0",
+  "urlPatterns": ["*linkedin.com*"],
+  "tags": ["linkedin", "social", "professional", "browser", "cdp"],
+  "successCount": 0,
+  "failCount": 0,
+
+  "urls": {
+    "feed": "https://www.linkedin.com/feed/",
+    "profile": "https://www.linkedin.com/in/{slug}/",
+    "messaging": "https://www.linkedin.com/messaging/",
+    "new_message": "https://www.linkedin.com/messaging/thread/new/",
+    "notifications": "https://www.linkedin.com/notifications/",
+    "network": "https://www.linkedin.com/mynetwork/",
+    "search_all": "https://www.linkedin.com/search/results/all/?keywords={query}",
+    "search_people": "https://www.linkedin.com/search/results/people/?keywords={query}",
+    "search_posts": "https://www.linkedin.com/search/results/content/?keywords={query}",
+    "search_companies": "https://www.linkedin.com/search/results/companies/?keywords={query}",
+    "jobs": "https://www.linkedin.com/jobs/",
+    "settings": "https://www.linkedin.com/psettings/"
+  },
+
+  "selectors": {
+    "nav": {
+      "home": "button[aria-label*='Home']",
+      "network": "a[aria-label*='My Network']",
+      "jobs": "button[aria-label*='Jobs']",
+      "messaging": "a[aria-label*='Messaging']",
+      "notifications": "a[aria-label*='Notifications']",
+      "me": "button:has-text('Me')",
+      "search": "input[aria-label='Search']"
+    },
+    "post_creation": {
+      "start_post": "button:has-text('Start a post')",
+      "text_editor": ".ql-editor",
+      "post_button": "button:has-text('Post')",
+      "emoji_button": "button[aria-label*='Emoji']",
+      "rewrite_ai": "button:has-text('Rewrite with AI')"
+    },
+    "post_actions": {
+      "like": "button[aria-label='React Like']",
+      "unlike": "button[aria-label*='Remove Like'], button[aria-pressed='true'][aria-label*='Like']",
+      "comment": "button[aria-label='Comment']",
+      "repost": "button[aria-label*='Repost']",
+      "send": "button[aria-label='Send in a private message']"
+    },
+    "comment": {
+      "textbox": ".ql-editor[data-placeholder='Add a comment\u2026']",
+      "submit": "button.comments-comment-box__submit-button, button:has-text('Post'):closest([class*='comment'])"
+    },
+    "connect": {
+      "invite_button": "button[aria-label*='Invite'][aria-label*='connect']",
+      "send_without_note": "button[aria-label='Send without a note']",
+      "send_now": "button[aria-label='Send now']",
+      "add_note": "button[aria-label='Add a note']"
+    },
+    "messaging": {
+      "compose": "button:has-text('Compose a new message')",
+      "recipient_input": "input[placeholder='Type a name or multiple names']",
+      "message_box": ".msg-form__contenteditable, div[role='textbox'][aria-label*='message']",
+      "send_button": "button[aria-label='Send'], button.msg-form__send-button",
+      "search_messages": "input[name='searchTerm']"
+    },
+    "profile": {
+      "connect_button": "button[aria-label*='connect']",
+      "follow_button": "button[aria-label*='Follow']",
+      "message_button": "button:has-text('Message')",
+      "more_button": "button[aria-label='More']",
+      "enhance_profile": "button:has-text('Enhance profile')"
+    },
+    "search": {
+      "input": "input[aria-label='Search']",
+      "results": ".search-results-container li, .reusable-search__result-container",
+      "filter_people": "button:has-text('People')",
+      "filter_posts": "button:has-text('Posts')",
+      "filter_companies": "button:has-text('Companies')"
+    }
+  },
+
+  "detection": {
+    "is_logged_in": "!!document.querySelector('button[aria-label*=\"Home\"]')",
+    "is_feed": "window.location.pathname === '/feed/' || window.location.pathname === '/feed'",
+    "is_profile": "window.location.pathname.startsWith('/in/')",
+    "is_messaging": "window.location.pathname.startsWith('/messaging')",
+    "is_search": "window.location.pathname.startsWith('/search')",
+    "is_network": "window.location.pathname.startsWith('/mynetwork')",
+    "has_post_dialog": "!!document.querySelector('[role=\"dialog\"] .ql-editor')"
+  },
+
+  "flows": {
+    "create_post": {
+      "steps": [
+        "Navigate to linkedin.com/feed/",
+        "Find and click 'Start a post' button (search by textContent)",
+        "Wait 1.5s for post creation dialog to open",
+        "Find text editor: .ql-editor (Quill editor)",
+        "Type post content via browser_fill_form with ~40ms delay",
+        "Click Post button in dialog",
+        "Wait 2s for post to publish"
+      ],
+      "guards": ["Must be logged in"],
+      "why": "LinkedIn uses Quill editor (.ql-editor) for both posts and comments. The 'Start a post' button doesn't have an aria-label — find it by textContent match."
+    },
+    "like_post": {
+      "steps": [
+        "Find Like button: button[aria-label='React Like']",
+        "Use JS dispatch (mousedown + mouseup + click) on Like button",
+        "Verify: button aria-pressed changes or aria-label changes to include 'Remove'"
+      ],
+      "guards": ["Must be logged in", "Post must not already be liked"]
+    },
+    "comment_on_post": {
+      "steps": [
+        "Click Comment button: button[aria-label='Comment']",
+        "Wait 1.5s for comment box to expand",
+        "Find comment textbox: .ql-editor[data-placeholder='Add a comment\u2026']",
+        "Type comment via browser_fill_form with ~60ms delay",
+        "Find Post button inside the comment area (not the main post dialog)",
+        "Click Post to submit comment"
+      ],
+      "guards": ["Must be logged in"]
+    },
+    "send_connection": {
+      "steps": [
+        "Navigate to person's profile or search results",
+        "Find Connect/Invite button: button[aria-label*='Invite'][aria-label*='connect']",
+        "Click Connect button",
+        "Wait 1.5s for connection dialog to appear",
+        "Optionally click 'Add a note' and type a message",
+        "Click 'Send without a note' or 'Send now'",
+        "Connection request sent"
+      ],
+      "guards": ["Must be logged in", "Must not already be connected"]
+    },
+    "send_message": {
+      "steps": [
+        "Navigate to linkedin.com/messaging/thread/new/",
+        "Wait 1.5s for compose view to load",
+        "Type recipient name into input[placeholder='Type a name or multiple names']",
+        "Wait 1.5s for autocomplete results",
+        "Click matching recipient",
+        "Type message into .msg-form__contenteditable",
+        "Click Send button"
+      ],
+      "guards": ["Must be logged in", "Recipient must be a 1st-degree connection for free accounts"]
+    },
+    "search": {
+      "steps": [
+        "Navigate to linkedin.com/search/results/all/?keywords={query}",
+        "Wait 2s for results to load",
+        "Extract results from .search-results-container li",
+        "Filter by People/Posts/Companies tabs as needed"
+      ],
+      "guards": ["Must be logged in"],
+      "why": "Direct URL navigation with encoded query is more reliable than typing in search bar."
+    },
+    "follow_profile": {
+      "steps": [
+        "Navigate to linkedin.com/in/{slug}/",
+        "Wait 2s for profile to load",
+        "Find Follow button: button[aria-label*='Follow']",
+        "Click Follow button",
+        "Verify button state changes"
+      ],
+      "guards": ["Must be logged in"]
+    },
+    "view_profile": {
+      "steps": [
+        "Navigate to linkedin.com/in/{slug}/",
+        "Wait 2s for profile to load",
+        "Extract name from h1, headline from .text-body-medium",
+        "Scroll to see experience, education, skills"
+      ],
+      "guards": ["Must be logged in"]
+    },
+    "scroll_and_extract_feed": {
+      "steps": [
+        "Navigate to linkedin.com/feed/",
+        "Wait 2s for feed to load",
+        "Extract visible posts from .feed-shared-update-v2 elements",
+        "Get author, text, engagement counts",
+        "Scroll down for more posts",
+        "Wait 1.5s for lazy-loaded content"
+      ],
+      "guards": ["Must be logged in"]
+    }
+  },
+
+  "errors": [
+    {
+      "error": "Login required",
+      "context": "Any action when not logged in",
+      "solution": "Log in manually. LinkedIn uses email/password or SSO.",
+      "severity": "high"
+    },
+    {
+      "error": "'Start a post' button has no aria-label",
+      "context": "Cannot use aria-label selector to find post creation button",
+      "solution": "Search by textContent: find button where text === 'Start a post'.",
+      "severity": "medium"
+    },
+    {
+      "error": "Comment Post button conflicts with main Post button",
+      "context": "Both post creation and comment have a 'Post' button",
+      "solution": "Find the Post button that's closest to the comment area: b.closest('[class*=\"comment\"]')",
+      "severity": "medium"
+    },
+    {
+      "error": "Like button uses 'React Like' not just 'Like'",
+      "context": "aria-label is 'React Like' not 'Like'",
+      "solution": "Use button[aria-label='React Like'] selector.",
+      "severity": "low"
+    },
+    {
+      "error": "Repost button not visible on all posts",
+      "context": "Some posts don't show Repost option",
+      "solution": "Check if button[aria-label*='Repost'] exists before clicking.",
+      "severity": "low"
+    },
+    {
+      "error": "LinkedIn uses Quill editor (.ql-editor)",
+      "context": "Both posts and comments use contenteditable Quill editor divs",
+      "solution": "Use browser_fill_form with .ql-editor selector. For comments, use data-placeholder attribute to distinguish.",
+      "severity": "medium"
+    },
+    {
+      "error": "Messaging requires 1st-degree connection",
+      "context": "Free accounts can only message connections",
+      "solution": "Send connection request first, or use InMail (Premium).",
+      "severity": "medium"
+    },
+    {
+      "error": "Frontmost app switches to VS Code when approving tool calls",
+      "context": "AccessibilityAdapter attaches to frontmost app",
+      "solution": "Use CDP browser tools — they work regardless of which app is frontmost.",
+      "severity": "high"
+    }
+  ],
+
+  "policyNotes": {
+    "rate_limits": [
+      "Connection requests: ~100/week",
+      "Messages: ~50/day (free), more with Premium",
+      "Posts: ~5/day recommended",
+      "Comments: ~30/day",
+      "Profile views: LinkedIn tracks and limits automated viewing"
+    ],
+    "safety": [
+      "Never automate login",
+      "LinkedIn aggressively detects automation — add 5-15s random delays",
+      "Use browser_stealth before interacting",
+      "Don't exceed connection request limits",
+      "Use browser_fill_form with 40-80ms delays for human-like typing",
+      "LinkedIn may require CAPTCHA or phone verification if suspicious activity detected"
+    ],
+    "tool_preferences": [
+      "browser_fill_form — for Quill editor posts/comments, search, messaging",
+      "JS dispatch (mousedown+mouseup+click) — for Like button (React Like)",
+      "browser_human_click — for Comment, Connect buttons",
+      "browser_js — for finding elements by textContent, submitting forms",
+      "browser_navigate — for search (direct URL), profile/messaging navigation"
+    ]
+  },
+
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://www.linkedin.com/feed/",
+      "description": "Open LinkedIn feed"
+    },
+    {
+      "action": "wait",
+      "ms": 2000,
+      "description": "Wait for feed to load"
+    },
+    {
+      "action": "extract",
+      "target": ".feed-shared-update-v2",
+      "format": "text",
+      "description": "Extract visible posts"
+    },
+    {
+      "action": "scroll",
+      "direction": "down",
+      "amount": 5,
+      "description": "Scroll for more posts"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for lazy-loaded posts"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture feed state"
+    }
+  ]
+}
