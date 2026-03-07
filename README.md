@@ -60,7 +60,7 @@ ScreenHand currently builds a native bridge locally for Accessibility/UI Automat
 
 ```bash
 git clone https://github.com/manushi4/screenhand.git
-cd screenhand/mvp
+cd screenhand
 npm install
 npm run build:native   # macOS — builds Swift bridge
 # npm run build:native:windows   # Windows — builds .NET bridge
@@ -77,7 +77,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mvp/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
     }
   }
 }
@@ -92,7 +92,7 @@ Add to your project `.mcp.json` or `~/.claude/settings.json`:
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mvp/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
     }
   }
 }
@@ -107,7 +107,7 @@ Add to `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for global):
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mvp/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
     }
   }
 }
@@ -120,7 +120,7 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp.screenhand]
 command = "npx"
-args = ["tsx", "/path/to/screenhand/mvp/mcp-desktop.ts"]
+args = ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
 transport = "stdio"
 ```
 
@@ -133,7 +133,7 @@ Add to your `openclaw.json`:
   "mcpServers": {
     "screenhand": {
       "command": "npx",
-      "args": ["tsx", "/path/to/screenhand/mvp/mcp-desktop.ts"]
+      "args": ["tsx", "/path/to/screenhand/mcp-desktop.ts"]
     }
   }
 }
@@ -565,7 +565,7 @@ Contributions are welcome! Please open an issue first to discuss what you'd like
 
 ```bash
 git clone https://github.com/manushi4/screenhand.git
-cd screenhand/mvp
+cd screenhand
 npm install
 npm run build:native
 npm test
@@ -573,12 +573,12 @@ npm test
 
 ## License
 
-MIT
+AGPL-3.0-only — Copyright (C) 2025 Clazro Technology Private Limited
 
 ---
 
 <div align="center">
 
-**[screenhand.com](https://screenhand.com)** | Built by [Khushi Singhal](https://github.com/manushi4) | A product of **Clazro Technology Private Limited**
+**[screenhand.com](https://screenhand.com)** | A product of **Clazro Technology Private Limited**
 
 </div>
