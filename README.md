@@ -306,7 +306,7 @@ export_playbook({ platform: "twitter", domain: "twitter.com" })
 ```
 This auto-extracts URLs, selectors, errors+solutions from your session and saves a ready-to-share `playbooks/twitter.json`.
 
-Available platforms: `devpost`. Add more by running `export_playbook` or creating JSON files in `playbooks/`.
+Available platforms: `instagram`, `threads`, `x-twitter`, `youtube`, `linkedin`, `reddit`, `discord`, `devto`, `n8n`, `devpost`. Add more by running `export_playbook` or creating JSON files in `playbooks/`.
 
 Zero performance cost — files only read when `platform_guide` is called.
 
