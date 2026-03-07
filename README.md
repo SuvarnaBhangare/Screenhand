@@ -21,8 +21,9 @@ An open-source [MCP server](https://modelcontextprotocol.io/) for macOS and Wind
 ## Why ScreenHand?
 
 - `~50ms` native UI actions via Accessibility APIs and Windows UI Automation
+- `~10ms` Chrome browser actions via DevTools Protocol — works in the background, no focus needed
 - `0` extra AI calls for native clicks, typing, and UI element lookup
-- `70+` tools across desktop apps, browser automation, OCR, memory, sessions, jobs, and playbooks
+- `82` tools across desktop apps, browser automation, OCR, memory, sessions, jobs, and playbooks
 - `macOS + Windows` behind the same MCP interface
 - **Multi-agent safe** — session leases prevent conflicts between Claude, Cursor, and Codex
 - **Background worker** — queue jobs and let the daemon process them continuously
@@ -47,7 +48,7 @@ It works as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 
 | AI can't see your screen | Screenshots + OCR return all visible text |
 | AI can't click UI elements | Accessibility API finds and clicks elements in ~50ms |
 | AI can't control browsers | Chrome DevTools Protocol gives full page control |
-| AI can't automate workflows | 70+ tools for cross-app automation |
+| AI can't automate workflows | 82 tools for cross-app automation |
 | Only works on one OS | Native bridges for both macOS and Windows |
 | Multiple agents conflict | Session leases with heartbeat and stall detection |
 | Jobs need manual triggering | Worker daemon processes the queue continuously |
@@ -67,6 +68,23 @@ npm run build:native   # macOS — builds Swift bridge
 ```
 
 Then connect ScreenHand to your AI client.
+
+### Enable Chrome Browser Control (optional)
+
+To use the `browser_*` tools (browser_js, browser_navigate, browser_click, etc.), launch Chrome with remote debugging enabled:
+
+```bash
+# macOS
+open -a "Google Chrome" --args --remote-debugging-port=9222
+
+# Windows
+chrome.exe --remote-debugging-port=9222
+
+# Linux
+google-chrome --remote-debugging-port=9222
+```
+
+> **Tip:** The browser tools use Chrome DevTools Protocol (CDP) — they work regardless of which app is in the foreground. You can stay in VS Code or your terminal while ScreenHand controls Chrome in the background.
 
 ### Claude Desktop
 
@@ -147,9 +165,50 @@ ScreenHand is a standard MCP server over stdio. It works with any MCP-compatible
 
 Replace `/path/to/screenhand` with the actual path where you cloned the repo.
 
+## Live Example — Instagram Automation via MCP
+
+Here's what a real session looks like. Claude Code calls ScreenHand's MCP tools to control Instagram in Chrome — all while you stay in VS Code:
+
+```
+You: Search for "screenhand" on Instagram and show me the results
+
+Claude: Let me list the Chrome tabs and find Instagram.
+
+→ browser_tabs()
+  [34DF5DE1] Instagram — https://www.instagram.com/
+  [0E25CDE2] Home • Threads — https://www.threads.com/
+
+→ browser_js({ code: "/* click Search icon */", tabId: "34DF5DE1" })
+  Clicked Search!
+
+→ browser_js({ code: "/* type into search input */", tabId: "34DF5DE1" })
+  Typed "screenhand" into search!
+
+→ browser_js({ code: "/* extract results */", tabId: "34DF5DE1" })
+  [{ "username": "screenhand_", "text": "screenhand_ ScreenHand" }]
+
+Found @screenhand_ as the top result.
+```
+
+**Key points:**
+- **No Chrome focus needed** — browser tools use CDP, so Chrome runs in the background while you work in VS Code
+- **No screenshots for clicks** — DOM queries and JS execution are instant (~10ms), not screenshot → LLM → coordinate click (~3-5s)
+- **Works with any site** — Instagram, LinkedIn, Twitter, Gmail, or any web app open in Chrome
+- **Anti-detection built in** — `browser_stealth` + `browser_human_click` + `browser_fill_form` for sites with bot detection
+
+For native desktop apps (Finder, Notes, Xcode, etc.), ScreenHand uses Accessibility APIs instead:
+
+```
+→ apps()                    # List running apps          ~10ms
+→ focus("com.apple.Notes")  # Bring Notes to front       ~10ms
+→ ui_tree()                 # Read full UI element tree   ~50ms
+→ ui_press("New Note")      # Click "New Note" button    ~50ms
+→ type_text("Hello world")  # Type text                  ~30ms
+```
+
 ## Tools
 
-ScreenHand exposes 70+ tools organized by category.
+ScreenHand exposes 82 tools organized by category.
 
 ### See the Screen
 
@@ -379,7 +438,7 @@ worker_start → worker_status → worker_stop
                          │ stdio JSON-RPC
 ┌────────────────────────▼────────────────────────────┐
 │               mcp-desktop.ts                         │
-│          (MCP Server — 70+ tools)                    │
+│          (MCP Server — 82 tools)                    │
 ├───────────┬──────────┬──────────────────────────────┤
 │ Native    │  Chrome  │  Memory / Supervisor / Jobs   │
 │ Bridge    │  CDP     │  / Playbooks / Worker         │
@@ -512,7 +571,7 @@ npm run build:native:windows  # build .NET bridge (Windows)
 ## FAQ
 
 ### What is ScreenHand?
-ScreenHand is an open-source MCP server that gives AI assistants like Claude the ability to see and control your desktop. It provides 70+ tools for screenshots, UI inspection, clicking, typing, browser automation, session management, job queuing, and playbook execution on both macOS and Windows.
+ScreenHand is an open-source MCP server that gives AI assistants like Claude the ability to see and control your desktop. It provides 82 tools across desktop automation, browser control (CDP), memory/learning, session supervision, job queuing, and playbooks — on both macOS and Windows.
 
 ### How does ScreenHand differ from Anthropic's Computer Use?
 Anthropic's Computer Use is a cloud-based feature built into Claude. ScreenHand is an open-source, local-first tool that runs entirely on your machine with no cloud dependency. It uses native OS APIs (Accessibility on macOS, UI Automation on Windows) which are faster and more reliable than screenshot-based approaches.
@@ -540,7 +599,7 @@ ScreenHand **integrates with** OpenClaw as an MCP server — giving your Claw ag
 }
 ```
 
-Your Claw keeps its visual understanding for complex tasks, but now has 70+ fast native tools for clicks, typing, menus, scrolling, browser control, and more. See the full [integration guide](docs/openclaw-integration.md).
+Your Claw keeps its visual understanding for complex tasks, but now has 82 fast native tools for clicks, typing, menus, scrolling, browser control, and more. See the full [integration guide](docs/openclaw-integration.md).
 
 ### Does ScreenHand work on Windows?
 Yes. ScreenHand supports both macOS and Windows. On macOS it uses a Swift native bridge with Accessibility APIs. On Windows it uses a C# (.NET 8) bridge with UI Automation and SendInput.
@@ -558,7 +617,7 @@ ScreenHand runs locally and never sends screen data to external servers. Dangero
 On macOS, it can control any app that exposes Accessibility elements (most apps do). On Windows, it works with any app that supports UI Automation. Some apps with custom rendering (games, some Electron apps) may have limited element tree support — use OCR as a fallback.
 
 ### How fast is ScreenHand?
-Accessibility/UI Automation operations take ~50ms. Chrome CDP operations take ~10ms. Screenshots with OCR take ~600ms. Memory lookups add ~0ms (in-memory cache). ScreenHand is significantly faster than screenshot-only approaches because it reads the UI tree directly.
+Accessibility/UI Automation operations take ~50ms. Chrome CDP operations take ~10ms and work in the background (Chrome doesn't need to be frontmost). Screenshots with OCR take ~600ms. Memory lookups add ~0ms (in-memory cache). ScreenHand is significantly faster than screenshot-based approaches because it reads the UI tree and DOM directly.
 
 ### Does the learning memory affect performance?
 No. All memory data is loaded into RAM at startup. Lookups are O(1) hash map reads. Disk writes are async and buffered — they never block tool calls. The memory system adds effectively zero latency to any tool call.

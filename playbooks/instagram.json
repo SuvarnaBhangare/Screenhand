@@ -1,41 +1,313 @@
 {
+  "id": "instagram",
+  "name": "Instagram Automation",
+  "description": "Battle-tested playbook for Instagram browser automation via CDP. Covers feed, search, like, comment, save, DM, create post, follow/unfollow, and profile viewing.",
   "platform": "instagram",
-  "version": "1.0.0",
-  "updated": "2026-03-05",
-  "description": "Instagram platform knowledge discovered via Screenhand exploration",
+  "version": "4.0.0",
+  "urlPatterns": ["*instagram.com*"],
+  "tags": ["instagram", "social", "browser", "cdp"],
+  "successCount": 0,
+  "failCount": 0,
+
   "urls": {
     "home": "https://www.instagram.com/",
-    "accounts_activity_": "https://www.instagram.com/accounts/activity/",
-    "accounts_center_": "https://www.instagram.com/accounts/center/",
-    "accounts_edit_": "https://www.instagram.com/accounts/edit/",
-    "accounts_emailsignup_": "https://www.instagram.com/accounts/emailsignup/",
-    "create_select_": "https://www.instagram.com/create/select/",
-    "direct_inbox_": "https://www.instagram.com/direct/inbox/",
-    "explore_": "https://www.instagram.com/explore/",
-    "notifications_": "https://www.instagram.com/notifications/",
-    "professional_dashboard_": "https://www.instagram.com/professional_dashboard/",
-    "reels_": "https://www.instagram.com/reels/",
-    "reels_DVEhlImkuX5_": "https://www.instagram.com/reels/DVEhlImkuX5/",
-    "reels_DVOV4_KjRVo_": "https://www.instagram.com/reels/DVOV4_KjRVo/",
-    "reels_DVc8QemCByv_": "https://www.instagram.com/reels/DVc8QemCByv/"
+    "explore": "https://www.instagram.com/explore/",
+    "reels": "https://www.instagram.com/reels/",
+    "messages": "https://www.instagram.com/direct/inbox/",
+    "profile": "https://www.instagram.com/{username}/",
+    "post": "https://www.instagram.com/p/{shortcode}/",
+    "settings": "https://www.instagram.com/accounts/edit/"
   },
-  "flows": {
-    "discovered": {
-      "steps": [
-        "No strategies recorded yet. Use the platform, then call export_playbook again."
-      ],
-      "selectors": {
-        "switch_display_language": "[aria-label=\"Switch Display Language\"]"
-      }
+
+  "selectors": {
+    "nav": {
+      "home": "a[href='/']",
+      "search": "svg[aria-label='Search']",
+      "explore": "a[href='/explore/']",
+      "reels": "a[href='/reels/']",
+      "messages": "a[href='/direct/inbox/']",
+      "notifications": "svg[aria-label='Notifications']",
+      "create": "svg[aria-label='New post']",
+      "profile": "svg[aria-label='Profile']"
+    },
+    "search": {
+      "input": "input[placeholder='Search']",
+      "clear": "svg[aria-label='Clear search input']",
+      "result_link": "a[href^='/'][role='link']"
+    },
+    "post": {
+      "like_button": "svg[aria-label='Like']",
+      "unlike_button": "svg[aria-label='Unlike']",
+      "comment_button": "svg[aria-label='Comment']",
+      "share_button": "svg[aria-label='Share Post']",
+      "save_button": "svg[aria-label='Save']",
+      "unsave_button": "svg[aria-label='Remove']",
+      "more_options": "svg[aria-label='More options']",
+      "comment_input": "textarea[aria-label='Add a comment\u2026']"
+    },
+    "feed": {
+      "article": "article",
+      "username": "article header a span",
+      "follow_button": "button:has-text('Follow')",
+      "like_count": "section span",
+      "caption": "span[dir='auto']"
+    },
+    "profile": {
+      "follow_button": "header button:has-text('Follow')",
+      "following_button": "header button:has-text('Following')",
+      "message_button": "header button:has-text('Message')",
+      "posts_count": "header section ul li:nth-child(1) span span",
+      "followers_count": "header section ul li:nth-child(2) a span span",
+      "following_count": "header section ul li:nth-child(3) a span span",
+      "post_grid": "article a[href^='/p/']"
+    },
+    "dm": {
+      "new_message": "svg[aria-label='New message']",
+      "search_input": "input[name='queryBox']",
+      "message_input": "div[role='textbox'][aria-label='Message']",
+      "send_button": "button:has-text('Send')",
+      "chat_button": "div[role='button']:has-text('Chat')"
+    },
+    "create_post": {
+      "new_post": "svg[aria-label='New post']",
+      "file_input": "input[type='file']",
+      "next_button": "button:has-text('Next')",
+      "share_button": "button:has-text('Share')",
+      "caption_input": "div[role='textbox'][aria-label*='caption']"
     }
   },
+
   "detection": {
-    "is_logged_in": "// Add detection JS for logged-in state"
+    "is_logged_in": "!!document.querySelector('svg[aria-label=\"Home\"]')",
+    "is_feed": "window.location.pathname === '/'",
+    "is_explore": "window.location.pathname.startsWith('/explore')",
+    "is_profile": "/^\\/[a-zA-Z0-9._]+\\/?$/.test(window.location.pathname)",
+    "is_post": "window.location.pathname.startsWith('/p/')",
+    "is_dm": "window.location.pathname.startsWith('/direct/')",
+    "has_search_open": "!!document.querySelector('input[placeholder=\"Search\"]')",
+    "has_dialog_open": "!!document.querySelector('div[role=\"dialog\"]')"
   },
-  "errors": [],
-  "_meta": {
-    "exported_from": "screenhand",
-    "actions_count": 31,
-    "strategies_count": 0
-  }
+
+  "flows": {
+    "like_post": {
+      "steps": [
+        "Find Like button: svg[aria-label='Like'] in the post",
+        "Use browser_human_click on the Like SVG (realistic CDP mouse events)",
+        "Verify heart turned red: svg[aria-label='Unlike'] now exists"
+      ],
+      "guards": ["Must be logged in", "Post must not already be liked (no Unlike button)"],
+      "why": "browser_human_click dispatches mouseMoved -> mousePressed -> mouseReleased at element coordinates, bypassing Instagram's simple click detection"
+    },
+    "comment_on_post": {
+      "steps": [
+        "Find comment textarea: textarea[aria-label='Add a comment\u2026']",
+        "Use browser_fill_form with ~80ms delay for human-like typing",
+        "Find Post button: element with textContent === 'Post'",
+        "Click Post button via browser_js (.click())",
+        "Wait 1.5s for comment to appear in the thread"
+      ],
+      "guards": ["Must be logged in", "Comments must be enabled on the post"]
+    },
+    "save_post": {
+      "steps": [
+        "Find Save button: svg[aria-label='Save']",
+        "Use browser_human_click on the Save SVG",
+        "Verify bookmark is filled: svg[aria-label='Remove'] now exists"
+      ],
+      "guards": ["Must be logged in", "Post must not already be saved"]
+    },
+    "send_dm": {
+      "steps": [
+        "Navigate to instagram.com/direct/inbox/",
+        "Click New message: browser_human_click on svg[aria-label='New message']",
+        "Wait 1s for dialog to open",
+        "Type recipient username into input[name='queryBox'] via browser_fill_form",
+        "Wait 2s for search results to load",
+        "Click matching recipient from search results",
+        "Click Chat button to open conversation",
+        "Wait 1.5s for message input to appear",
+        "Type message into div[role='textbox'][aria-label='Message'] via browser_fill_form",
+        "Click Send button or find button with text 'Send'"
+      ],
+      "guards": ["Must be logged in", "Recipient must exist"]
+    },
+    "create_post": {
+      "steps": [
+        "Click New post: svg[aria-label='New post'] via its parent element",
+        "Wait 1.5s for 'Create new post' dialog to appear",
+        "Use file input (input[type='file']) to set image/video",
+        "Click Next to proceed to filters",
+        "Click Next again to proceed to caption",
+        "Type caption into caption textbox via browser_fill_form",
+        "Click Share to publish"
+      ],
+      "guards": ["Must be logged in", "File must be JPEG, PNG, AVIF, HEIC, or MP4"],
+      "why": "File input accepts: image/avif, image/jpeg, image/png, image/heic, image/heif, video/mp4, video/quicktime"
+    },
+    "follow_profile": {
+      "steps": [
+        "Navigate to instagram.com/{username}/",
+        "Wait 2s for profile to load",
+        "Find Follow button in header: header button with text 'Follow'",
+        "Click Follow button via browser_js",
+        "Verify button changed to 'Following'"
+      ],
+      "guards": ["Must be logged in", "Must not already be following"]
+    },
+    "unfollow_profile": {
+      "steps": [
+        "Find Following button in header: header button with text 'Following'",
+        "Click Following button to open unfollow menu",
+        "Wait 1s for menu to appear",
+        "Click Unfollow button in the popup",
+        "Verify button changed back to 'Follow'"
+      ],
+      "guards": ["Must be logged in", "Must currently be following"]
+    },
+    "search_profile": {
+      "steps": [
+        "Click Search icon: svg[aria-label='Search'] in sidebar",
+        "Wait 500ms for search input to appear",
+        "Type search query into input[placeholder='Search'] via browser_fill_form",
+        "Wait 2s for results to load",
+        "Extract profile results from search panel",
+        "Click first matching profile link"
+      ],
+      "guards": ["Must be logged in"]
+    },
+    "scroll_and_extract_feed": {
+      "steps": [
+        "Navigate to instagram.com",
+        "Verify logged in (check for Home icon)",
+        "Extract visible posts (username, likes, caption) from article elements",
+        "Scroll down to load more content",
+        "Wait 1s for lazy-loaded posts",
+        "Extract next batch of posts"
+      ],
+      "guards": ["Must be logged in"]
+    },
+    "view_profile": {
+      "steps": [
+        "Navigate to instagram.com/{username}",
+        "Wait 2s for profile header to load",
+        "Extract posts, followers, following counts from header",
+        "Extract first 12 post thumbnails from article a[href^='/p/']"
+      ],
+      "guards": ["Must be logged in", "Profile must not be private or must follow"]
+    }
+  },
+
+  "errors": [
+    {
+      "error": "Login required / redirected to accounts/login",
+      "context": "Any action when not logged in",
+      "solution": "Log in manually first. ScreenHand cannot bypass login.",
+      "severity": "high"
+    },
+    {
+      "error": "Rate limited / Action Blocked",
+      "context": "Too many likes, follows, or comments",
+      "solution": "Wait 15-30 minutes. Limits: ~60 likes/hr, ~20 follows/hr, ~20 comments/hr.",
+      "severity": "high"
+    },
+    {
+      "error": "Like button click not registering",
+      "context": "Instagram detects simple JS .click() on Like button",
+      "solution": "Use browser_human_click which dispatches realistic CDP mouse events (mouseMoved -> mousePressed -> mouseReleased).",
+      "severity": "high"
+    },
+    {
+      "error": "SVG element has (0,0) bounding box",
+      "context": "Some SVG elements return zero-dimension bounding rects",
+      "solution": "Walk up the parent chain to find an ancestor with real dimensions, or use the post-specific page where elements render properly.",
+      "severity": "medium"
+    },
+    {
+      "error": "Clicked wrong element (e.g. wrong Post button)",
+      "context": "Generic selectors like div[role='button'] match multiple elements",
+      "solution": "Use browser_js to find specific element by textContent match: document.querySelectorAll('button').find(b => b.textContent.trim() === 'Post')",
+      "severity": "medium"
+    },
+    {
+      "error": "Search input not found",
+      "context": "Search panel didn't open",
+      "solution": "Wait 500ms after clicking Search icon, then look for input[placeholder='Search'].",
+      "severity": "medium"
+    },
+    {
+      "error": "Element not found / selector returned null",
+      "context": "Instagram lazy-loads content",
+      "solution": "Scroll to ensure element is in viewport, then re-query.",
+      "severity": "medium"
+    },
+    {
+      "error": "Frontmost app switches to VS Code when approving tool calls",
+      "context": "AccessibilityAdapter attaches to frontmost app",
+      "solution": "Use CDP browser tools (browser_js, browser_human_click, browser_fill_form) — they work regardless of which app is frontmost.",
+      "severity": "high"
+    }
+  ],
+
+  "policyNotes": {
+    "rate_limits": [
+      "Likes: ~60/hr, ~150/day",
+      "Follows: ~20/hr, ~100/day",
+      "Comments: ~20/hr, ~60/day",
+      "DMs: ~50/day"
+    ],
+    "safety": [
+      "Never automate login",
+      "Add 2-5s random delays between actions",
+      "Use browser_stealth before interacting",
+      "Don't exceed rate limits",
+      "Use browser_human_click for Like/Save/Follow (not JS .click())",
+      "Use browser_fill_form with 50-100ms delays for typing (anti-detection)"
+    ],
+    "tool_preferences": [
+      "browser_human_click — for buttons Instagram protects (Like, Save, Follow)",
+      "browser_fill_form — for text inputs with human-like keystroke delays",
+      "browser_js — for finding elements by textContent, extracting data, clicking unprotected buttons",
+      "browser_navigate — for page navigation (works in background)"
+    ]
+  },
+
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://www.instagram.com/",
+      "description": "Open Instagram home feed"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for feed to load"
+    },
+    {
+      "action": "extract",
+      "target": "article",
+      "format": "text",
+      "description": "Extract first visible post content"
+    },
+    {
+      "action": "scroll",
+      "direction": "down",
+      "amount": 5,
+      "description": "Scroll down to see more posts"
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Wait for new posts to load"
+    },
+    {
+      "action": "extract",
+      "target": "article",
+      "format": "text",
+      "description": "Extract posts after scroll"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture current feed state"
+    }
+  ]
 }
