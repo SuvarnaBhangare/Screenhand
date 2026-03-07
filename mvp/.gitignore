@@ -12,3 +12,21 @@ experiments/
 .audit-log.jsonl
 .screenhand/
 .logs/
+
+# Claude Code
+CLAUDE.md
+.npmrc
+
+# Temp scripts
+.tmp/
+.tmp_*
+
+# Marketing / non-code assets
+*.pages
+*.xlsx
+*.pptx
+*.docx
+docs/marketing/
+scripts/instagram-*
+scripts/start-instagram-*
+scripts/build-instagram-*

@@ -6,7 +6,7 @@
 
 An open-source [MCP server](https://modelcontextprotocol.io/) for macOS and Windows that gives Claude, Cursor, Codex CLI, and OpenClaw fast desktop control via Accessibility/UI Automation, OCR, and Chrome CDP.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![npm: screenhand](https://img.shields.io/npm/v/screenhand)](https://www.npmjs.com/package/screenhand)
 [![CI](https://github.com/manushi4/screenhand/actions/workflows/ci.yml/badge.svg)](https://github.com/manushi4/screenhand/actions/workflows/ci.yml)
 [![Platform: macOS & Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-green)]()
