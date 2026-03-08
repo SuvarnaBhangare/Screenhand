@@ -1,0 +1,303 @@
+{
+  "id": "codex-desktop",
+  "name": "Codex Desktop App Automation",
+  "description": "Battle-tested playbook for OpenAI Codex desktop app automation via CDP. Covers thread creation, prompt submission, result reading, sidebar navigation, and menu actions. Requires launching Codex with --remote-debugging-port flag.",
+  "platform": "codex-desktop",
+  "version": "2.0.0",
+  "urlPatterns": ["app://-/index.html*"],
+  "tags": ["codex", "openai", "desktop", "electron", "cdp", "ai-agent"],
+  "successCount": 18,
+  "failCount": 1,
+
+  "urls": {
+    "cdp_list": "http://127.0.0.1:9333/json/list",
+    "cdp_browser": "http://127.0.0.1:9333/json/version",
+    "app_page": "app://-/index.html?hostId=local"
+  },
+
+  "launch": {
+    "command": "/Applications/Codex.app/Contents/MacOS/Codex",
+    "args": ["--remote-debugging-port=9333"],
+    "alt_command": "open -a Codex",
+    "alt_args": ["--args", "--remote-debugging-port=9333"],
+    "bundleId": "com.openai.codex",
+    "startup_wait_ms": 5000,
+    "notes": "Must launch with --remote-debugging-port to enable CDP. Default port 9333 avoids conflict with Chrome on 9222."
+  },
+
+  "selectors": {
+    "prompt": {
+      "editor": ".ProseMirror",
+      "editor_contenteditable": ".ProseMirror[contenteditable='true']",
+      "placeholder_text": "Ask Codex anything, @ to add files, / for commands",
+      "file_input": "input[type='file']",
+      "hidden_textarea": "textarea"
+    },
+    "toolbar": {
+      "model_selector": "GPT-5.4",
+      "model_options": ["GPT-5.3-Codex", "GPT-5.4", "GPT-5.2-Codex", "GPT-5.1-Codex-Max", "GPT-5.2", "GPT-5.1-Codex-Mini"],
+      "effort_selector": "Extra High",
+      "effort_options": ["Low", "Medium", "High", "Extra High"],
+      "mode_local": "Local",
+      "mode_options": ["Local project", "New worktree", "Connect Codex web", "Send to cloud"],
+      "permissions": "Default permissions",
+      "permissions_options": ["Default permissions", "Full access"],
+      "branch_selector": "main",
+      "branch_actions": ["Create and checkout new branch…"],
+      "create_button": "Create"
+    },
+    "sidebar": {
+      "new_thread": "New thread",
+      "automations": "Automations",
+      "skills": "Skills",
+      "settings": "Settings",
+      "threads_section": "Threads",
+      "workspace_section": "Automator",
+      "show_more": "Show more"
+    },
+    "header": {
+      "new_thread_title": "New thread",
+      "open_button": "Open",
+      "commit_button": "Commit",
+      "handoff_button": "Hand off",
+      "diff_stats": "+N -N",
+      "notes": "Hand off only visible in completed threads. Commit has dropdown arrow."
+    },
+    "thread_result": {
+      "follow_up_input": "Ask for follow-up changes",
+      "worked_for": "Worked for"
+    }
+  },
+
+  "detection": {
+    "is_running": "lsof -i :9333 | grep LISTEN",
+    "is_ready": "curl -s http://127.0.0.1:9333/json/list | grep 'Codex'",
+    "get_page_id": "curl -s http://127.0.0.1:9333/json/list | python3 -c \"import sys,json; pages=[p for p in json.load(sys.stdin) if p['type']=='page']; print(pages[0]['id'] if pages else '')\"",
+    "has_prompt": "!!document.querySelector('.ProseMirror')",
+    "is_idle": "!!document.querySelector('.ProseMirror') && document.querySelector('.ProseMirror').textContent === ''"
+  },
+
+  "flows": {
+    "submit_prompt": {
+      "description": "Type a prompt and submit it to Codex",
+      "method": "cdp",
+      "steps": [
+        {
+          "action": "focus_editor",
+          "code": "document.querySelector('.ProseMirror').focus()"
+        },
+        {
+          "action": "clear_editor",
+          "code": "var pm = document.querySelector('.ProseMirror'); pm.innerHTML = '<p><br></p>'; pm.focus()"
+        },
+        {
+          "action": "type_text",
+          "code": "document.querySelector('.ProseMirror').focus(); document.execCommand('insertText', false, '{TEXT}')",
+          "notes": "execCommand is the ONLY reliable method. Direct value/innerHTML setting breaks ProseMirror state."
+        },
+        {
+          "action": "submit",
+          "method": "Input.dispatchKeyEvent",
+          "params": {
+            "type": "keyDown",
+            "key": "Enter",
+            "code": "Enter",
+            "modifiers": 4,
+            "windowsVirtualKeyCode": 13,
+            "nativeVirtualKeyCode": 13
+          },
+          "notes": "modifiers: 4 = Meta/Cmd key. Must send both keyDown and keyUp."
+        }
+      ]
+    },
+    "new_thread": {
+      "description": "Create a new thread",
+      "methods": [
+        {
+          "method": "menu_click",
+          "path": "File/New Thread",
+          "pid_required": true,
+          "notes": "Most reliable. Use menu_click(pid, 'File/New Thread')"
+        },
+        {
+          "method": "keyboard",
+          "shortcut": "cmd+n",
+          "notes": "Only works when Codex has keyboard focus"
+        },
+        {
+          "method": "click",
+          "target": "New thread sidebar button",
+          "notes": "Sidebar button, position varies"
+        }
+      ]
+    },
+    "read_result": {
+      "description": "Read the result of a completed task",
+      "code": "document.querySelector('.ProseMirror')?.closest('[class*=thread]')?.textContent || document.body.innerText.substring(0, 2000)"
+    },
+    "sidebar_navigate": {
+      "description": "Click a thread in the sidebar",
+      "method": "click_text",
+      "notes": "Use OCR-based click_text with the thread title, or CDP querySelectorAll on sidebar links"
+    }
+  },
+
+  "tool_preferences": {
+    "prompt_input": ["cdp_execCommand"],
+    "submit": ["cdp_Input.dispatchKeyEvent"],
+    "new_thread": ["menu_click", "keyboard_cmd+n"],
+    "focus_app": ["focus(bundleId)"],
+    "read_screen": ["screenshot", "ocr"],
+    "sidebar": ["click_text", "cdp_click"],
+    "NOT_WORKING": ["type_text (VS Code steals focus)", "applescript keystroke (Electron WebView blocks)", "DOM value setter (React/ProseMirror ignores)"]
+  },
+
+  "errors": [
+    {
+      "error": "VS Code steals keyboard focus during type_text",
+      "cause": "Claude Code outputs text in VS Code terminal between focus and type, bringing VS Code to front",
+      "fix": "Use CDP execCommand instead of type_text. CDP operates at browser level regardless of OS focus.",
+      "tool": "type_text"
+    },
+    {
+      "error": "AppleScript keystroke does not reach prompt",
+      "cause": "Codex is an Electron app. The prompt is a ProseMirror web component inside a WebView, not a native text field. System Events keystroke cannot target web components.",
+      "fix": "Use CDP with --remote-debugging-port=9333. Connect via WebSocket and use Runtime.evaluate + execCommand.",
+      "tool": "applescript"
+    },
+    {
+      "error": "DOM value setter does not update React state",
+      "cause": "Setting textarea.value or innerHTML directly bypasses React/ProseMirror state management. The visual display does not update.",
+      "fix": "Use document.execCommand('insertText', false, text) which triggers proper ProseMirror input handling.",
+      "tool": "browser_js"
+    },
+    {
+      "error": "No CDP port available",
+      "cause": "Codex was launched without --remote-debugging-port flag",
+      "fix": "Quit Codex and relaunch: /Applications/Codex.app/Contents/MacOS/Codex --remote-debugging-port=9333",
+      "tool": "cdp"
+    },
+    {
+      "error": "WebSocket connect ECONNREFUSED ::1:9333",
+      "cause": "Node.js WebSocket resolves localhost to IPv6 (::1) but Codex only listens on IPv4",
+      "fix": "Use ws://127.0.0.1:9333 instead of ws://localhost:9333",
+      "tool": "cdp"
+    },
+    {
+      "error": "Sidebar Settings click does not open Settings page",
+      "cause": "The sidebar 'Settings' is a collapsible section header containing Automations and Skills, not a navigation button to app settings",
+      "fix": "Use menu: Codex/Settings… via menu_click(pid, 'Codex/Settings…'). This opens the actual Settings panel with General, Configuration, MCP servers, Git, etc.",
+      "tool": "click_text"
+    },
+    {
+      "error": "Cmd+Enter does not submit (first attempt)",
+      "cause": "Clicked Create button at wrong coordinates or prompt not focused",
+      "fix": "Use CDP Input.dispatchKeyEvent with modifiers:4 (Meta) + Enter. Always focus .ProseMirror first.",
+      "tool": "key"
+    }
+  ],
+
+  "architecture": {
+    "framework": "Electron",
+    "renderer": "Chromium (CDP-compatible)",
+    "editor": "ProseMirror (contenteditable div)",
+    "state_management": "React",
+    "debug_port": 9333,
+    "native_elements": "AXGroup only (no AXTextField/AXTextArea for prompt)",
+    "accessibility_tree": "382 elements total, but main content is unlabeled AXGroup hierarchy",
+    "cdp_pages": "1 main page (type: page, title: Codex) + 3-4 workers"
+  },
+
+  "cdp_helper": {
+    "description": "Node.js helper to interact with Codex desktop app via CDP",
+    "connect": "new WebSocket('ws://127.0.0.1:9333/devtools/page/{PAGE_ID}')",
+    "get_page_id": "curl -s http://127.0.0.1:9333/json/list | jq '.[0].id'",
+    "example_submit_prompt": "const ws = new WebSocket('ws://127.0.0.1:9333/devtools/page/{PAGE_ID}');\nws.on('open', () => {\n  // Type\n  ws.send(JSON.stringify({id:1, method:'Runtime.evaluate', params:{expression: \"document.querySelector('.ProseMirror').focus(); document.execCommand('insertText', false, 'YOUR PROMPT HERE')\"}}));\n  // Submit after 500ms\n  setTimeout(() => {\n    ws.send(JSON.stringify({id:2, method:'Input.dispatchKeyEvent', params:{type:'keyDown', key:'Enter', code:'Enter', modifiers:4, windowsVirtualKeyCode:13}}));\n    setTimeout(() => {\n      ws.send(JSON.stringify({id:3, method:'Input.dispatchKeyEvent', params:{type:'keyUp', key:'Enter', code:'Enter', modifiers:4, windowsVirtualKeyCode:13}}));\n    }, 100);\n  }, 500);\n});"
+  },
+
+  "settings": {
+    "access": "Menu: Codex/Settings… (sidebar 'Settings' is section label, not direct navigation)",
+    "sections": {
+      "General": {
+        "options": ["Default open destination (VS Code)", "Language (Auto Detect)", "Thread detail (Steps with code commands)", "Prevent sleep while running", "Require Cmd+Enter for long prompts", "Speed (Fast)", "Follow-up behavior (Queue/Steer)", "Appearance (Theme, fonts)", "Notifications"]
+      },
+      "Configuration": {
+        "options": ["config.toml editor", "Open source licenses", "Import external agent config (Claude skills → Codex skills)"]
+      },
+      "Personalization": {
+        "options": ["Personality (Pragmatic)", "Custom instructions"]
+      },
+      "MCP_servers": {
+        "installed": ["clazro-marketing", "sh (ScreenHand)", "supabase"],
+        "recommended": ["Linear", "Notion", "Figma", "Playwright"],
+        "actions": ["Add server", "Install", "Refresh"]
+      },
+      "Git": {
+        "options": ["Branch prefix", "Always force push (--force-with-lease)", "Commit instructions", "Pull request instructions"]
+      },
+      "Environments": {
+        "projects": ["Automator (manushi4)", "clazro-clazro_test (manushi4)"],
+        "actions": ["Add project"]
+      },
+      "Worktrees": {
+        "options": ["Auto-delete old worktrees", "Auto-delete limit"]
+      },
+      "Archived_threads": {}
+    }
+  },
+
+  "skills": {
+    "installed": ["Seo Geo", "Skill Creator", "Skill Installer", "Supabase Control"],
+    "recommended": ["Aspnet Core", "Chatgpt Apps", "Cloudflare Deploy", "Develop Web Game", "Doc", "Figma", "Figma Implement Design", "GH Address Comments", "GH Fix CI", "Imagegen", "Jupyter Notebook", "Linear", "Netlify Deploy", "Notion Knowledge Capture", "Notion Meeting Intelligence", "Notion Research Documentation", "Notion Spec to Implementation", "OpenAI Docs", "PDF", "Playwright", "Playwright Interactive", "Render Deploy", "Screenshot", "Security Best Practices", "Security Ownership Map", "Security Threat Model", "Sentry", "Slides", "Sora", "Speech", "Spreadsheet", "Transcribe", "Vercel Deploy", "Winui App", "Yeet"],
+    "actions": ["New skill", "Install"]
+  },
+
+  "automations": {
+    "description": "Beta feature — scheduled threads",
+    "templates": [
+      "Scan recent commits for bugs",
+      "Draft weekly release notes",
+      "Summarize git activity for standup",
+      "Summarize CI failures and flaky tests",
+      "Create a small classic game",
+      "Suggest next skills to deepen",
+      "Weekly update from PRs/rollouts/incidents",
+      "Flag performance regressions",
+      "Detect dependency drift",
+      "Add focused tests for untested paths",
+      "Pre-release verification checklist",
+      "Update AGENTS.md",
+      "Summarize PRs by teammate",
+      "Triage new issues",
+      "Check CI failures by root cause",
+      "Scan outdated dependencies",
+      "Audit performance regressions",
+      "Update changelog"
+    ],
+    "actions": ["New automation"]
+  },
+
+  "menu_structure": {
+    "File": ["New Thread", "Open Folder…", "Close Window", "Close All"],
+    "Edit": ["Undo", "Redo", "Cut", "Copy", "Paste", "Select All", "Writing Tools", "Emoji & Symbols"],
+    "View": ["Toggle Sidebar", "Toggle Terminal", "Toggle Diff Panel", "Find", "Previous Thread", "Next Thread", "Back", "Forward", "Zoom In", "Zoom Out", "Toggle Full Screen"],
+    "Window": ["Minimize", "Zoom", "Fill", "Center", "Full Screen Tile"],
+    "Help": ["Codex Documentation", "What's new", "Automations", "Local Environments", "Worktrees", "Skills", "Model Context Protocol", "Troubleshooting", "Keyboard Shortcuts"]
+  },
+
+  "_meta": {
+    "created": "2026-03-08",
+    "tested_on": "Codex Desktop (Electron), macOS arm64",
+    "tested_actions": ["launch", "focus", "new_thread", "type_prompt", "submit_prompt", "read_result", "menu_click", "screenshot", "ocr", "ui_tree", "settings_navigation", "model_selector", "effort_selector", "mode_selector", "permissions_selector", "branch_selector", "skills_page", "automations_page", "sidebar_thread_click", "workspace_selector", "mcp_servers_page", "git_settings", "environments", "worktrees"],
+    "battle_tested": true,
+    "key_discoveries": [
+      "ProseMirror editor + CDP execCommand + Input.dispatchKeyEvent Cmd+Enter is the only reliable flow for prompt input",
+      "Settings page accessible via menu Codex/Settings… NOT sidebar Settings button (which is a section label)",
+      "Sidebar Skills/Automations buttons require clicking the BUTTON element, not the text SPAN",
+      "Hand off button only appears in completed thread headers",
+      "click_text works for sidebar thread navigation",
+      "Cmd+N works for new thread when Codex has focus",
+      "MCP servers (including ScreenHand 'sh') visible and configurable in Settings"
+    ]
+  }
+}
