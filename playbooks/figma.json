@@ -1,0 +1,398 @@
+{
+  "id": "figma",
+  "name": "Figma Design Tool Automation",
+  "description": "Battle-tested playbook for Figma browser automation via CDP. Covers file browser navigation, editor tools (shapes, text, frames), layer management, properties panel, share dialog, design/prototype tabs, and export. Figma uses WebGL canvas — DOM mouse events don't work on canvas, but CDP Input.dispatchMouseEvent (browser_human_click) does.",
+  "platform": "figma",
+  "version": "1.0.0",
+  "urlPatterns": ["*figma.com/files/*", "*figma.com/design/*", "*figma.com/board/*"],
+  "tags": ["figma", "design", "browser", "cdp", "webgl", "canvas"],
+  "successCount": 12,
+  "failCount": 3,
+
+  "urls": {
+    "home": "https://www.figma.com/files/recent",
+    "team_files": "https://www.figma.com/files/team/{teamId}/recents-and-sharing",
+    "design_file": "https://www.figma.com/design/{fileId}/{fileName}",
+    "board_file": "https://www.figma.com/board/{fileId}/{fileName}",
+    "community": "https://www.figma.com/community",
+    "settings": "https://www.figma.com/settings"
+  },
+
+  "selectors": {
+    "file_browser": {
+      "search_input": "[data-testid='facetedSearchInput']",
+      "profile_button": "[data-testid='ProfileButton']",
+      "desktop_header": "[data-testid='file-browser-desktop-header']",
+      "new_design_file": "[data-testid='new-design-file-button']",
+      "new_figjam_file": "[data-testid='new-whiteboard-file-button']",
+      "new_slides_file": "[data-testid='new-slides-file-button']",
+      "new_buzz_file": "[data-testid='new-cooper-file-button']",
+      "new_site_file": "[data-testid='new-sites-file-button']",
+      "new_make_file": "[data-testid='new-figmake-file-button']",
+      "file_import": "[data-testid='file-import-button']",
+      "thumbnail_container": "[data-testid='thumbnail-container']",
+      "favorite_star": "[data-testid='favorite-star-button']",
+      "ai_prompt_box": "[data-testid='prompt-box']",
+      "ai_submit": "[data-testid='prompt-box-submit-button']",
+      "help_widget": "[data-testid='help-widget-button']"
+    },
+    "editor_header": {
+      "filename": "[data-testid='filename']",
+      "folder_link": "[data-testid='folder-name-link']",
+      "main_menu": "button[aria-label='Main menu']",
+      "missing_fonts": "button[aria-label='Missing fonts']",
+      "minimize_ui": "button[aria-label='Minimize UI']",
+      "edit_file_menu": "button[aria-label='Edit file menu']",
+      "multiplayer_tools": "button[aria-label='Multiplayer tools']",
+      "present": "[data-testid='present-as-prototype']",
+      "prototype_view": "button[aria-label='Prototype view']",
+      "share": "[data-testid='multiplayer-toolbar-share-button']",
+      "image_avatar": "[data-testid='image-avatar']"
+    },
+    "left_panel": {
+      "body": "[data-testid='left-panel-body']",
+      "file_layers_tab": "[data-testid='FILE_LAYERS_TAB_TEST_ID']",
+      "new_page_button": "[data-testid='new-page-button']",
+      "pages_row": "[data-testid='PagesRowWrapper']",
+      "objects_panel": "[data-testid='objects-panel']",
+      "layer_row": "[data-testid='layer-row']",
+      "layer_row_with_children": "[data-testid='layer-row-with-children']",
+      "layer_panel_row": "[data-testid$='-layers-panel-row']",
+      "locked_icon": "[data-testid='locked-icon']",
+      "visible_icon": "[data-testid='visible-icon']",
+      "toggle_visibility": "[data-testid='object-row-toggle-visibility']",
+      "resize_handle": "[data-testid='leftPanelContainer.resizablePanel']",
+      "find_button": "button[aria-label='Find']"
+    },
+    "toolbar": {
+      "move_tool": "[data-testid='Move-tool']",
+      "frame_tool": "[data-testid='Frame-tool']",
+      "rectangle_tool": "[data-testid='Rectangle-tool']",
+      "pen_tool": "[data-testid='Pen-tool']",
+      "text_tool": "[data-testid='Text-tool']",
+      "comment_tool": "[data-testid='Comment-tool']",
+      "actions_tool": "[data-testid='Actions-tool']",
+      "copy_colors_tool": "[data-testid='Copy colors-tool']",
+      "select_tools_chevron": "[data-testid='SelectTools-chevron']",
+      "frame_tools_chevron": "[data-testid='FrameTools-chevron']",
+      "shape_tools_chevron": "[data-testid='ShapeTools-chevron']",
+      "pen_tools_chevron": "[data-testid='PenTools-chevron']",
+      "toolbelt_wrapper": "[data-testid='design-toolbelt-wrapper']",
+      "mode_segmented_control": "[data-testid='toolbelt-mode-segmented-control']",
+      "mode_draw": "[data-testid='toolbelt-mode-option-illustration']",
+      "mode_design": "[data-testid='toolbelt-mode-option-design']",
+      "mode_dev": "[data-testid='toolbelt-mode-option-handoff']"
+    },
+    "properties_panel": {
+      "panel": "[data-testid='properties-panel']",
+      "tab_header": "[data-testid='property-panel-tab-header']",
+      "resize_handle": "[data-testid='propertiesPanelContainer.resizablePanel']",
+      "x_position": "input[aria-label='X-position']",
+      "y_position": "input[aria-label='Y-position']",
+      "rotation": "input[aria-label='Rotation']",
+      "width": "input[aria-label='transform-width']",
+      "height": "input[aria-label='transform-height']",
+      "aspect_ratio_lock": "input[aria-label='aspect-ratio-lock-toggle']",
+      "corner_radius": "input[aria-label='transform-corner-radius']",
+      "color": "input[aria-label='Color']",
+      "opacity": "input[aria-label*='opacity']",
+      "font_search": "input[aria-label='font-picker-search-input']",
+      "font_size": "input[aria-label^='Font size']",
+      "create_component": "button[aria-label='Create component']",
+      "align_left": "button[aria-label='Align left']",
+      "align_center_h": "button[aria-label='Align horizontal centers']",
+      "align_right": "button[aria-label='Align right']",
+      "align_top": "button[aria-label='Align top']",
+      "align_center_v": "button[aria-label='Align vertical centers']",
+      "align_bottom": "button[aria-label='Align bottom']",
+      "rotate_90": "button[aria-label='Rotate 90˚ right']",
+      "flip_horizontal": "button[aria-label='Flip horizontal']",
+      "flip_vertical": "button[aria-label='Flip vertical']",
+      "resize_to_fit": "button[aria-label='Resize to fit']",
+      "blend_mode": "button[aria-label='Apply blend mode']",
+      "individual_corners": "button[aria-label='Individual corners']",
+      "fill_styles": "button[aria-label='Fill, Apply styles and variables']",
+      "add_fill": "button[aria-label='Add fill']",
+      "fill_color_swatch": "button[aria-label^='Solid color hex']",
+      "add_stroke": "button[aria-label='Add stroke']",
+      "stroke_styles": "button[aria-label='Stroke, Apply styles and variables']",
+      "add_effect": "button[aria-label='Add effect']",
+      "add_layout_guide": "button[aria-label='Add layout guide']",
+      "add_export": "button[aria-label='Add export settings']",
+      "open_variables": "button[aria-label='Open variables']",
+      "create_style": "button[aria-label='Create style']"
+    },
+    "share_dialog": {
+      "email_input": "input[aria-label='Add comma separated emails to invite']",
+      "invite_button": "button:has-text('Invite')",
+      "copy_link": "button:has-text('Copy link')",
+      "copy_dev_mode_link": "button:has-text('Copy Dev Mode link')",
+      "copy_prototype_link": "button:has-text('Copy prototype link')",
+      "publish_community": "button:has-text('Publish to Community')",
+      "get_embed_code": "button:has-text('Get embed code')"
+    },
+    "other": {
+      "canvas": "canvas",
+      "bottom_right_tools": "[data-testid='bottom-right-tools-container']",
+      "help_zoom_menu": "[data-testid='buzz-help-and-zoom-menu']",
+      "help_button": "[data-testid='help-widget-button']",
+      "visual_bell": "[data-testid='visual-bell-root']",
+      "plugin_modal": "[data-testid='pluginModalWindow']"
+    }
+  },
+
+  "keyboard_shortcuts": {
+    "move_tool": "V",
+    "frame_tool": "F",
+    "rectangle_tool": "R",
+    "pen_tool": "P",
+    "text_tool": "T",
+    "comment_tool": "C",
+    "copy_colors": "Ctrl+C",
+    "actions_palette": "Cmd+K",
+    "notes": "Keyboard shortcuts only work when Figma canvas has focus. JS keydown events do NOT trigger Figma shortcuts — they must go through CDP Input.dispatchKeyEvent or native OS key events."
+  },
+
+  "detection": {
+    "is_file_browser": "window.location.href.includes('/files/')",
+    "is_editor": "window.location.href.includes('/design/') || window.location.href.includes('/board/')",
+    "has_canvas": "!!document.querySelector('canvas')",
+    "is_logged_in": "!!document.querySelector('[data-testid=\"ProfileButton\"]') || !!document.querySelector('[data-testid=\"filename\"]')",
+    "has_selection": "!!document.querySelector('input[aria-label=\"X-position\"]')",
+    "tool_active": "tool => document.querySelector(`[data-testid=\"${tool}-tool\"]`)?.getAttribute('aria-pressed') === 'true'",
+    "share_dialog_open": "!!Array.from(document.querySelectorAll('[role=\"dialog\"]')).find(d => d.textContent?.includes('Share'))",
+    "menu_open": "document.querySelectorAll('[role=\"menuitem\"]').length > 0"
+  },
+
+  "flows": {
+    "open_file_from_browser": {
+      "description": "Open a design file from the file browser home page",
+      "steps": [
+        "Find thumbnail: [data-testid='thumbnail-container']",
+        "Get parent container with file name text to identify correct file",
+        "Double-click via JS: full mousedown+mouseup+click sequence with detail:1 then detail:2 + dblclick event",
+        "Wait for URL to change to /design/ or /board/",
+        "Wait for canvas element to appear"
+      ],
+      "guards": ["Must be on file browser page", "Must be logged in"],
+      "why": "Single click selects file (shows context menu). Double-click opens it. Figma's SPA uses custom event handlers — need full dblclick event sequence with proper detail counts. browser_human_click does single click only."
+    },
+    "create_new_file": {
+      "description": "Create a new design/FigJam/Slides file",
+      "steps": [
+        "Click new file button: [data-testid='new-design-file-button'] (or whiteboard/slides/etc)",
+        "Use browser_human_click on the button",
+        "Wait for URL to change to /design/ and canvas to load"
+      ],
+      "guards": ["Must be on file browser page"]
+    },
+    "select_tool": {
+      "description": "Activate a toolbar tool (Move, Frame, Rectangle, Pen, Text, Comment)",
+      "steps": [
+        "Click tool button: [data-testid='{ToolName}-tool'] via browser_human_click",
+        "Verify: aria-pressed='true' on the clicked tool button"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "browser_human_click reliably activates toolbar tools. The tool stays active until used or another tool is selected."
+    },
+    "create_shape": {
+      "description": "Create a rectangle, frame, or other shape on canvas",
+      "steps": [
+        "Activate tool: browser_human_click on [data-testid='Rectangle-tool'] (or Frame-tool, etc)",
+        "Verify tool is active: aria-pressed='true'",
+        "Click on canvas: browser_human_click on 'canvas' selector",
+        "This creates a default 100x100 element at the click position",
+        "Tool auto-deactivates (switches back to Move)",
+        "New layer appears in layers panel: [data-testid$='-layers-panel-row']"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "CDP Input.dispatchMouseEvent (via browser_human_click) works on Figma's WebGL canvas. DOM-level mouse events (dispatchEvent MouseEvent) do NOT work. Single click creates default-sized shape; drag would create custom size but requires native drag or CDP mouse event sequences."
+    },
+    "select_layer": {
+      "description": "Select a layer from the layers panel",
+      "steps": [
+        "Find layer: [data-testid$='-layers-panel-row'] with matching text content",
+        "Use browser_human_click on the layer row",
+        "Verify: properties panel shows X-position, Y-position inputs with values",
+        "Selected layer's properties become editable in the right panel"
+      ],
+      "guards": ["Must be in editor"]
+    },
+    "modify_properties": {
+      "description": "Change element position, size, color, or other properties",
+      "steps": [
+        "Select the target layer first (see select_layer flow)",
+        "Find the input: e.g. input[aria-label='X-position']",
+        "Use browser_fill_form with clear:true to type new value",
+        "Press Enter to commit: dispatch keydown Enter event on the input",
+        "Verify: re-read input value matches new value"
+      ],
+      "guards": ["Must have a selection"],
+      "why": "browser_fill_form with CDP key events works reliably on Figma's property inputs. The value commits on Enter or blur."
+    },
+    "open_share_dialog": {
+      "description": "Open the Share dialog",
+      "steps": [
+        "Click Share button: browser_human_click on [data-testid='multiplayer-toolbar-share-button']",
+        "Dialog appears with role='dialog' containing 'Share' text",
+        "Available actions: invite via email, copy link, copy prototype link, publish to community"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Clicking Share button again closes the dialog (toggle behavior). Canvas click does NOT close it."
+    },
+    "close_share_dialog": {
+      "description": "Close the Share dialog",
+      "steps": [
+        "Click Share button again: browser_human_click on [data-testid='multiplayer-toolbar-share-button']",
+        "Dialog closes"
+      ],
+      "why": "Share button toggles the dialog. Escape key via JS doesn't work. Canvas click doesn't close it either."
+    },
+    "open_main_menu": {
+      "description": "Open the hamburger/main menu",
+      "steps": [
+        "Click: browser_human_click on button[aria-label='Main menu']",
+        "Menu items appear with role='menuitem'",
+        "Items: Back to files, Actions, File, Edit, View, Object, Text, Arrange, Vector, Plugins, Widgets, Preferences, Libraries, Help and account"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Menu auto-closes very quickly — you must read items immediately in the same tool call sequence. The menu is a toggle (click again to close)."
+    },
+    "switch_design_prototype_tab": {
+      "description": "Switch between Design and Prototype tabs in properties panel",
+      "steps": [
+        "Find tab header: [data-testid='property-panel-tab-header']",
+        "Click Design or Prototype button within it",
+        "Verify: aria-selected='true' on the clicked tab"
+      ]
+    },
+    "navigate_back_to_files": {
+      "description": "Go back to file browser from editor",
+      "steps": [
+        "Click folder link: [data-testid='folder-name-link']",
+        "Wait for URL to change back to /files/"
+      ]
+    },
+    "present_prototype": {
+      "description": "Start prototype presentation",
+      "steps": [
+        "Click Present button: browser_human_click on [data-testid='present-as-prototype']",
+        "Prototype opens in new tab or overlay"
+      ]
+    }
+  },
+
+  "tool_preferences": {
+    "toolbar_clicks": ["browser_human_click"],
+    "canvas_interactions": ["browser_human_click (creates shapes)", "browser_human_click cannot drag — use native drag or CDP mouse sequences for custom sizes"],
+    "layer_selection": ["browser_human_click on layer rows"],
+    "property_editing": ["browser_fill_form (clear:true) + Enter keydown"],
+    "menu_navigation": ["browser_human_click to open, browser_js to read items quickly"],
+    "file_opening": ["JS dblclick event sequence on thumbnail container"],
+    "data_extraction": ["browser_js — query data-testid elements, aria-labels, input values"],
+    "NOT_WORKING": [
+      "JS dispatchEvent MouseEvent on canvas (WebGL ignores DOM events)",
+      "JS KeyboardEvent for keyboard shortcuts (Figma intercepts at lower level)",
+      "JS Escape to close dialogs (doesn't reach Figma's event handler)",
+      "native drag (bridge timeout on macOS)",
+      "screenshot (cg.captureScreen timeout)"
+    ]
+  },
+
+  "errors": [
+    {
+      "error": "DOM mouse events don't work on Figma canvas",
+      "context": "Attempting to draw, click, or drag on the WebGL canvas using JS dispatchEvent(new MouseEvent(...))",
+      "solution": "Use CDP-level mouse events via browser_human_click. Figma's canvas is WebGL-based and only responds to real browser input events, not DOM-synthesized ones.",
+      "severity": "high"
+    },
+    {
+      "error": "JS keyboard shortcuts don't trigger Figma actions",
+      "context": "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'r'})) does not activate Rectangle tool",
+      "solution": "Use browser_human_click on toolbar buttons instead. For shortcuts that must go through keyboard, use CDP Input.dispatchKeyEvent or native OS key events.",
+      "severity": "high"
+    },
+    {
+      "error": "File double-click doesn't work with browser_human_click",
+      "context": "browser_human_click dispatches a single click on thumbnail, which selects the file but doesn't open it",
+      "solution": "Use JS to dispatch full dblclick event sequence: mousedown(detail:1) + mouseup + click(detail:1) + mousedown(detail:2) + mouseup + click(detail:2) + dblclick(detail:2) on the thumbnail container or its parent card element.",
+      "severity": "high"
+    },
+    {
+      "error": "Main menu auto-closes before items can be read",
+      "context": "Opening main menu via browser_human_click, then reading items in a separate browser_js call — menu is already closed",
+      "solution": "Read menu items immediately in the same interaction. Or use direct button clicks for known actions (e.g. Share, Present) instead of navigating menus.",
+      "severity": "medium"
+    },
+    {
+      "error": "Share dialog doesn't close with Escape or canvas click",
+      "context": "JS Escape keydown event doesn't reach Figma's dialog handler. Clicking canvas also doesn't dismiss the share dialog.",
+      "solution": "Click the Share button again to toggle the dialog closed.",
+      "severity": "medium"
+    },
+    {
+      "error": "Property input shows 'Mixed' after value change",
+      "context": "After browser_fill_form + Enter on X-position input, value briefly shows 'Mixed'",
+      "solution": "This is a transient state when multiple elements are affected or during React re-render. Re-click the layer and re-read the input — the value should be correctly updated.",
+      "severity": "low"
+    },
+    {
+      "error": "Screenshot timeout on macOS",
+      "context": "cg.captureScreen timed out after 15000ms when Figma editor is open",
+      "solution": "Use browser_js to extract text content and element states instead of screenshots. For visual verification, use browser_dom or read data-testid attributes.",
+      "severity": "medium"
+    },
+    {
+      "error": "Native drag timeout",
+      "context": "mcp__sh__drag (cg.mouseDrag) times out when trying to draw shapes by dragging on canvas",
+      "solution": "Use single-click approach: activate shape tool + browser_human_click on canvas creates default 100x100 element. Resize via properties panel inputs afterward.",
+      "severity": "medium"
+    }
+  ],
+
+  "policyNotes": {
+    "canvas_architecture": "Figma uses WebGL (asm.js/Wasm) for rendering. The canvas element is a single <canvas> tag — there are no DOM elements for design objects. All interaction must go through CDP-level input events or toolbar/panel DOM elements.",
+    "auto_layout": "Auto Layout options appear as radio buttons (NONE, VERTICAL, HORIZONTAL, GRID) in properties panel when a frame is selected.",
+    "layer_ids": "Layer panel rows use data-testid format '{nodeId}-layers-panel-row' where nodeId matches Figma's internal node ID (e.g. '605:11').",
+    "tool_behavior": "Shape tools (Rectangle, Frame) auto-deactivate after creating one element, returning to Move tool. Text tool stays active until explicitly switched.",
+    "mode_switching": "Three modes available via toolbelt-mode-segmented-control: Draw (illustration), Design, Dev Mode (handoff).",
+    "safety": [
+      "Add 1-2s delays between actions to allow Figma's WebSocket sync",
+      "Verify tool activation via aria-pressed before canvas interactions",
+      "Always select layers via layers panel rather than canvas clicks for reliability",
+      "Use browser_fill_form with clear:true for property inputs"
+    ]
+  },
+
+  "_meta": {
+    "created": "2026-03-09",
+    "tested_on": "Figma (browser, Chrome), macOS arm64",
+    "tested_actions": [
+      "file_browser_navigation",
+      "open_file_via_dblclick",
+      "toolbar_tool_activation",
+      "create_rectangle_on_canvas",
+      "create_frame_on_canvas",
+      "text_tool_activation",
+      "layer_selection_via_panel",
+      "property_value_modification",
+      "share_dialog_open_close",
+      "main_menu_open",
+      "design_prototype_tab_switch",
+      "data_testid_extraction"
+    ],
+    "battle_tested": true,
+    "key_discoveries": [
+      "WebGL canvas only responds to CDP Input.dispatchMouseEvent, not DOM MouseEvent — browser_human_click works, JS dispatchEvent doesn't",
+      "Single CDP click with active shape tool creates default 100x100 element — no drag needed for basic creation",
+      "JS keyboard events don't trigger Figma shortcuts — must use CDP Input.dispatchKeyEvent or toolbar button clicks",
+      "File browser uses custom SPA click handlers — need full JS dblclick event sequence to open files",
+      "Share dialog toggle: click Share button to open AND close — Escape and canvas click don't work",
+      "Main menu auto-closes rapidly — must read items immediately or use direct action buttons instead",
+      "Layer rows use data-testid='{nodeId}-layers-panel-row' format for targeting specific layers",
+      "Tool activation confirmed via aria-pressed='true', tool auto-deactivates to Move after shape creation",
+      "Properties panel inputs respond to browser_fill_form + Enter keydown for value commits",
+      "Figma has 3 editor modes: Draw, Design, Dev Mode — switchable via segmented control in toolbelt"
+    ]
+  }
+}
