@@ -16,6 +16,40 @@ You can:
 
 ---
 
+## STOP — Read This First (Common Mistakes)
+
+### Mistake #1: Using session_start + navigate for browser automation
+
+**WRONG:**
+```
+session_start(profile: "figma") → ax_session_figma_123
+navigate(sessionId: "ax_session_figma_123", url: "https://figma.com")
+→ ERROR: "Session not found"
+```
+
+**RIGHT:**
+```
+browser_tabs → get tab IDs (no session needed!)
+browser_navigate(url: "https://figma.com", tabId: "ABC123")
+browser_human_click(selector: "button", tabId: "ABC123")
+```
+
+**Why:** `session_start` creates an Accessibility adapter session (`ax_session_*`) for native desktop apps. It is NOT for browsers. Browser tools (`browser_*`) connect to Chrome via CDP directly — they don't need sessions. Sessions also get lost when the MCP server restarts between tool calls, causing "Session not found" errors.
+
+**Rule:** For anything in Chrome (websites, web apps, Figma, etc.) → use `browser_*` tools. For native desktop apps (Finder, Codex, etc.) → use `focus` + `click`/`key`/`type_text`. You almost never need `session_start`.
+
+### Mistake #2: Using native tools (click, key, type_text) for browser pages
+
+These tools send OS-level events to the **frontmost app**. But Claude Code runs in VS Code/Terminal, which steals focus when it outputs text. So by the time `type_text` fires, VS Code is in front — not Chrome.
+
+**Solution:** Use CDP browser tools (`browser_fill_form`, `browser_human_click`, `browser_js`) — they work regardless of which app is in front.
+
+### Mistake #3: Not calling browser_tabs first
+
+Tab IDs change when the MCP server restarts. Always call `browser_tabs` at the start of any browser workflow to get fresh IDs.
+
+---
+
 ## Tool Categories (The Ones You'll Actually Use)
 
 ### Browser Tools (90% of your work)
