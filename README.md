@@ -310,6 +310,99 @@ Available platforms: `instagram`, `threads`, `x-twitter`, `youtube`, `linkedin`,
 
 Zero performance cost — files only read when `platform_guide` is called.
 
+#### Creating a Playbook (Step-by-Step)
+
+Playbooks are **learned through live testing**, not generated upfront. Here's how to create one for any platform (e.g., Figma):
+
+**Step 1: Connect to the platform**
+```
+browser_open({ url: "https://figma.com" })     # Open in Chrome
+browser_stealth({ tabId: "..." })                # Anti-detection if needed
+```
+
+**Step 2: Discover selectors**
+```
+browser_dom({ selector: "button", tabId: "..." })   # Find all buttons
+browser_js({ code: "document.querySelector('[data-testid]')" })  # Test selectors
+ui_tree()                                             # For desktop apps — native elements
+```
+
+**Step 3: Test actions & document what works**
+```
+browser_human_click({ selector: ".toolbar-frame", tabId: "..." })  # Does this work?
+browser_fill_form({ selector: "input.search", text: "test" })      # Type into fields
+browser_js({ code: "el.dispatchEvent(new MouseEvent('click'))" })  # JS fallback
+```
+
+Every time an action **fails**, document the error and workaround — this is the most valuable part of a playbook.
+
+**Step 4: Export the playbook**
+```
+export_playbook({ platform: "figma", domain: "figma.com" })
+```
+
+This auto-generates a `playbooks/figma.json` from your session.
+
+**Step 5: Refine the JSON**
+
+A playbook JSON has this structure:
+
+```json
+{
+  "id": "figma",
+  "name": "Figma Automation",
+  "platform": "figma",
+  "version": "1.0.0",
+  "urlPatterns": ["*figma.com*"],
+
+  "selectors": {
+    "toolbar": {
+      "move_tool": "[data-testid='toolbar-move']",
+      "frame_tool": "[data-testid='toolbar-frame']"
+    },
+    "layers_panel": { "layer_item": ".layer-row" }
+  },
+
+  "flows": {
+    "create_frame": {
+      "steps": [
+        "Click Frame tool: [data-testid='toolbar-frame']",
+        "Click and drag on canvas at coordinates",
+        "Set dimensions in properties panel"
+      ],
+      "guards": ["Must be logged in", "Must have edit access"],
+      "why": "Canvas is WebGL — DOM selectors don't work for on-canvas elements"
+    }
+  },
+
+  "errors": [
+    {
+      "error": "Canvas click doesn't register via browser_click",
+      "context": "Figma renders on WebGL canvas, not DOM elements",
+      "solution": "Use coordinate-based click() for on-canvas actions. Use browser_click only for toolbar/panel UI.",
+      "severity": "high"
+    }
+  ],
+
+  "policyNotes": {
+    "rate_limits": ["API: 50 req/min"],
+    "tool_preferences": [
+      "browser_click — for toolbar and panel buttons",
+      "click (coordinates) — for canvas interactions",
+      "browser_js — for extracting layer data and properties"
+    ]
+  }
+}
+```
+
+**Key sections explained:**
+- **`selectors`** — CSS selectors organized by UI area. Found via `browser_dom` and `browser_js`.
+- **`flows`** — Step-by-step workflows. Each flow has `steps`, `guards` (preconditions), and `why` (explains non-obvious choices).
+- **`errors`** — The most valuable section. Documents what **doesn't work** and the workaround. Saves hours for anyone automating the same platform.
+- **`policyNotes`** — Rate limits, safety rules, which ScreenHand tools work best for this platform.
+
+> **Pro tip:** The `errors` section is what makes playbooks powerful. Every platform has quirks — React overriding DOM events, WebGL canvases ignoring clicks, dropdowns needing JS dispatch instead of mouse events. Documenting these saves hours of debugging.
+
 ### AppleScript (macOS only)
 
 | Tool | What it does |
