@@ -1,13 +1,13 @@
 {
   "id": "figma",
   "name": "Figma Design Tool Automation",
-  "description": "Battle-tested playbook for Figma browser automation via CDP. Covers file browser navigation, editor tools (shapes, text, frames), layer management, properties panel, share dialog, design/prototype tabs, and export. Figma uses WebGL canvas — DOM mouse events don't work on canvas, but CDP Input.dispatchMouseEvent (browser_human_click) does.",
+  "description": "Battle-tested playbook for Figma browser automation via CDP. Covers file browser navigation, editor tools (shapes, text, frames), layer management, properties panel, share dialog, design/prototype tabs, export, and programmatic design via Figma Plugin API. Figma uses WebGL canvas — DOM mouse events don't work on canvas, but CDP Input.dispatchMouseEvent (browser_human_click) does. For complex UI creation, use the Figma Plugin API (figma.createFrame/Text/Rectangle) via browser_js — far more reliable than manual canvas clicks.",
   "platform": "figma",
-  "version": "1.0.0",
-  "urlPatterns": ["*figma.com/files/*", "*figma.com/design/*", "*figma.com/board/*"],
-  "tags": ["figma", "design", "browser", "cdp", "webgl", "canvas"],
-  "successCount": 12,
-  "failCount": 3,
+  "version": "3.4.0",
+  "urlPatterns": ["*figma.com/files/*", "*figma.com/design/*", "*figma.com/board/*", "*figma.com/community/*"],
+  "tags": ["figma", "design", "browser", "cdp", "webgl", "canvas", "animation", "prototyping", "plugins"],
+  "successCount": 131,
+  "failCount": 21,
 
   "urls": {
     "home": "https://www.figma.com/files/recent",
@@ -15,6 +15,7 @@
     "design_file": "https://www.figma.com/design/{fileId}/{fileName}",
     "board_file": "https://www.figma.com/board/{fileId}/{fileName}",
     "community": "https://www.figma.com/community",
+    "community_plugin": "https://www.figma.com/community/plugin/{pluginId}/{pluginSlug}",
     "settings": "https://www.figma.com/settings"
   },
 
@@ -38,6 +39,8 @@
     },
     "editor_header": {
       "filename": "[data-testid='filename']",
+      "filename_input": "input[aria-label='Figma Design']",
+      "_filename_note": "Click [data-testid='filename'] to enter edit mode. The input that appears has aria-label='Figma Design' (not the file name). Use browser_fill_form on this input, then Enter to commit.",
       "folder_link": "[data-testid='folder-name-link']",
       "main_menu": "button[aria-label='Main menu']",
       "missing_fonts": "button[aria-label='Missing fonts']",
@@ -92,6 +95,7 @@
       "rotation": "input[aria-label='Rotation']",
       "width": "input[aria-label='transform-width']",
       "height": "input[aria-label='transform-height']",
+      "_width_height_note": "Width/height inputs may not have aria-labels in some Figma versions. Fallback: find inputs with value '100' (default size) inside properties panel after the X/Y/Rotation inputs. Use JS select() + execCommand('insertText') + Tab/Enter to set values.",
       "aspect_ratio_lock": "input[aria-label='aspect-ratio-lock-toggle']",
       "corner_radius": "input[aria-label='transform-corner-radius']",
       "color": "input[aria-label='Color']",
@@ -131,6 +135,19 @@
       "publish_community": "button:has-text('Publish to Community')",
       "get_embed_code": "button:has-text('Get embed code')"
     },
+    "actions_panel": {
+      "actions_button": "button[aria-label='Actions']",
+      "_actions_note": "Two Actions buttons may exist in DOM (one per toolbar row). Use the visible one (getBoundingClientRect().width > 0). Located in the bottom toolbar.",
+      "quick_actions_window": ".quick_actions--qaV2Window--EtP7F",
+      "quick_actions_search": ".search--searchInput--k55la",
+      "plugins_widgets_tab": "text content 'Plugins & widgets' inside the quick actions window"
+    },
+    "plugin_ui": {
+      "plugin_iframe": "iframe[src*='plugin-sandbox']",
+      "_plugin_iframe_note": "Plugin UI runs in sandboxed iframe. Content NOT accessible via parent JS. Use screenshot/OCR + coordinates for interaction.",
+      "plugin_container": ".jsvm_ui--pluginUI--YQm-H",
+      "plugin_modal_window": "[data-testid='pluginModalWindow']"
+    },
     "other": {
       "canvas": "canvas",
       "bottom_right_tools": "[data-testid='bottom-right-tools-container']",
@@ -149,7 +166,8 @@
     "text_tool": "T",
     "comment_tool": "C",
     "copy_colors": "Ctrl+C",
-    "actions_palette": "Cmd+K",
+    "actions_palette": "Cmd+/ or Cmd+K",
+    "rerun_last_plugin": "Cmd+Option+P",
     "notes": "Keyboard shortcuts only work when Figma canvas has focus. JS keydown events do NOT trigger Figma shortcuts — they must go through CDP Input.dispatchKeyEvent or native OS key events."
   },
 
@@ -180,11 +198,321 @@
     "create_new_file": {
       "description": "Create a new design/FigJam/Slides file",
       "steps": [
-        "Click new file button: [data-testid='new-design-file-button'] (or whiteboard/slides/etc)",
-        "Use browser_human_click on the button",
-        "Wait for URL to change to /design/ and canvas to load"
+        "Find new file button: [data-testid='new-design-file-button'] (or whiteboard/slides/etc)",
+        "Use JS click: document.querySelector('[data-testid=\"new-design-file-button\"]').click()",
+        "Wait for URL to change to /design/: browser_wait with window.location.href.includes('/design/')",
+        "Wait for canvas: browser_wait with !!document.querySelector('canvas')"
       ],
-      "guards": ["Must be on file browser page"]
+      "guards": ["Must be on file browser page"],
+      "why": "browser_human_click on the new file button does NOT work — it clicks at button coordinates but Figma's SPA doesn't respond to CDP mouse events on this button. JS .click() works reliably. The new file opens in the same tab (not a new tab)."
+    },
+    "rename_file": {
+      "description": "Rename the current design file",
+      "steps": [
+        "Click filename: browser_human_click on [data-testid='filename']",
+        "Input appears with aria-label='Figma Design' (always this label, not the current filename)",
+        "Type new name: browser_fill_form on input[aria-label='Figma Design'] with clear:true",
+        "Commit: JS dispatch keydown Enter on the input, or Tab away",
+        "Verify: re-read [data-testid='filename'] textContent"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "The filename input always has aria-label='Figma Design' regardless of current name. browser_fill_form with clear:true works for typing the new name."
+    },
+    "programmatic_design": {
+      "description": "Create complex UI designs programmatically using Figma Plugin API via browser_js",
+      "steps": [
+        "The Figma Plugin API (figma.*) is available in browser_js — no plugin installation needed",
+        "Load fonts first: await figma.loadFontAsync({ family: 'Inter', style: 'Regular' })",
+        "Create frames: const frame = figma.createFrame(); frame.resize(390, 844); frame.fills = [{type:'SOLID', color:{r:0,g:0,b:0}}]",
+        "Create text: const t = figma.createText(); t.characters = 'Hello'; t.fontSize = 24; t.fontName = {family:'Inter', style:'Bold'}",
+        "Create shapes: figma.createRectangle(), figma.createEllipse()",
+        "Parent elements: frame.appendChild(child)",
+        "Set position: element.x = 20; element.y = 100",
+        "Set colors: element.fills = [{type:'SOLID', color:{r:1,g:1,b:1}}]",
+        "Strokes: element.strokes = [{type:'SOLID', color:{r:0,g:1,b:0}}]; element.strokeWeight = 2",
+        "Corner radius: element.cornerRadius = 16",
+        "Zoom to fit: figma.viewport.scrollAndZoomIntoView(figma.currentPage.children)",
+        "Wrap in async IIFE: (async () => { await figma.loadFontAsync(...); ... return 'done'; })()"
+      ],
+      "guards": ["Must be in editor with canvas loaded"],
+      "why": "RECOMMENDED for complex designs. The Figma Plugin API is far more reliable than clicking canvas elements one by one. It avoids all issues with canvas coordinates, focus stealing, and timing. You can create entire multi-screen app designs in a single browser_js call. Available fonts: Inter (Regular, Medium, Semi Bold, Bold, Extra Bold), Roboto, and other Google Fonts loaded in the file."
+    },
+    "single_scrollable_website": {
+      "description": "Create a full scrollable website in one frame (not separate screens) for realistic prototype testing",
+      "steps": [
+        "Create ONE tall frame: const P = figma.createFrame(); P.resize(1440, 7200); P.clipsContent = true;",
+        "Stack sections vertically inside: Hero (y:0-900), Features (y:900-1700), etc.",
+        "For alternating dark/light sections: add full-width Rectangle fills at section Y offsets",
+        "Set prototype starting point: figma.currentPage.flowStartingPoints = [{nodeId: P.id, name: 'Website'}]",
+        "In prototype mode, the frame scrolls vertically like a real webpage",
+        "No click-to-navigate needed — just scroll. Much more realistic than separate screen frames."
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Separate frames per section break the scrolling experience in prototype mode. A single tall frame with clipsContent=true behaves like a real scrollable website. Users can test the full UX flow by scrolling, not clicking. Height of 7200px fits ~8 desktop sections at 900px each."
+    },
+    "prototype_connections": {
+      "description": "Set up prototype flows and transitions between frames",
+      "steps": [
+        "Set starting point: page.flowStartingPoints = [{nodeId: frameId, name: 'Flow Name'}]",
+        "Add click navigation: frame.reactions = [{trigger:{type:'ON_CLICK'}, actions:[{type:'NODE', destinationId:targetId, navigation:'NAVIGATE', transition:{type:'SMART_ANIMATE', easing:{type:'EASE_IN_AND_OUT'}, duration:0.5}, preserveScrollPosition:false}]}]",
+        "Transition types: SMART_ANIMATE, DISSOLVE, SLIDE_IN, SLIDE_OUT, PUSH, MOVE_IN, MOVE_OUT",
+        "Trigger types: ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, AFTER_TIMEOUT, MOUSE_ENTER, MOUSE_LEAVE",
+        "For multi-screen flows: loop through frames setting each to navigate to next"
+      ],
+      "guards": ["Must have frames on the page"],
+      "why": "Prototype connections make designs interactive in Figma's prototype mode. SMART_ANIMATE smoothly transitions matching layers between frames."
+    },
+    "effects_and_glassmorphism": {
+      "description": "Apply shadows, blurs, and glassmorphic effects via Plugin API",
+      "steps": [
+        "Drop shadow glow: element.effects = [{type:'DROP_SHADOW', color:{r,g,b, a:0.2}, offset:{x:0,y:0}, radius:50, spread:0, visible:true, blendMode:'NORMAL'}]",
+        "Layer blur (ambient orbs): element.effects = [{type:'LAYER_BLUR', radius:150, visible:true}]",
+        "BACKGROUND_BLUR (real glassmorphism): element.effects = [{type:'BACKGROUND_BLUR', radius:40, visible:true}] — requires semi-transparent fill on the element",
+        "Glass card recipe: fill white at 10% opacity + BACKGROUND_BLUR radius 24-40 + white stroke at 20% + DROP_SHADOW",
+        "Dark glass: fill black at 30% + BACKGROUND_BLUR + INNER_SHADOW (top edge reflection)",
+        "Tinted glass: fill brand-color at 15% + BACKGROUND_BLUR + colored border",
+        "Multiple effects stack: element.effects = [backgroundBlur, dropShadow, innerShadow]",
+        "Behind the glass: place colorful blurred ellipses (LAYER_BLUR) behind the glass card for visible frosted effect"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "BACKGROUND_BLUR is the real glassmorphism (equivalent to CSS backdrop-filter:blur). Must have content behind the element for the blur to be visible. Combine with semi-transparent fill + border + inner shadow for convincing glass. Three variants tested: light glass, dark glass, tinted glass."
+    },
+    "auto_layout": {
+      "description": "Create responsive flexbox-like layouts via Plugin API",
+      "steps": [
+        "Horizontal row: frame.layoutMode = 'HORIZONTAL'; frame.itemSpacing = 16;",
+        "Vertical stack: frame.layoutMode = 'VERTICAL'; frame.itemSpacing = 12;",
+        "Sizing: frame.primaryAxisSizingMode = 'AUTO'; frame.counterAxisSizingMode = 'AUTO'; (or 'FIXED')",
+        "Padding: frame.paddingLeft = 24; frame.paddingRight = 24; frame.paddingTop = 20; frame.paddingBottom = 20;",
+        "Alignment: frame.primaryAxisAlignItems = 'CENTER'|'MIN'|'MAX'|'SPACE_BETWEEN'; frame.counterAxisAlignItems = 'CENTER'|'MIN'|'MAX';",
+        "Child fill: child must be appended FIRST, then set child.layoutSizingHorizontal = 'FILL'; (ERRORS if set before appending to auto-layout parent)",
+        "Wrap layout: frame.layoutWrap = 'WRAP'; frame.counterAxisSpacing = 10; (tag clouds, chip grids)",
+        "Nested: auto-layout frames inside auto-layout frames — e.g. horizontal row of vertical cards"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Auto Layout is THE most important feature for real UI design. Without it, everything is absolute-positioned and breaks. CRITICAL GOTCHA: layoutSizingHorizontal='FILL' MUST be set AFTER appending the child to an auto-layout parent, not before — Figma throws 'FILL can only be set on children of auto-layout frames' error."
+    },
+    "image_fills": {
+      "description": "Load real images from URLs into Figma designs",
+      "steps": [
+        "Load image: const image = await figma.createImageAsync('https://images.unsplash.com/photo-xxx?w=400&h=300&fit=crop');",
+        "Apply to any shape: node.fills = [{type:'IMAGE', imageHash:image.hash, scaleMode:'FILL'}];",
+        "Scale modes: 'FILL' (cover), 'FIT' (contain), 'CROP' (manual crop), 'TILE' (repeat)",
+        "Circular avatar: const avatar = figma.createEllipse(); avatar.fills = [{type:'IMAGE', imageHash:img.hash, scaleMode:'FILL'}];",
+        "Avatar with border: avatar.strokes = [{type:'SOLID', color:{r:0.4,g:0.3,b:1}}]; avatar.strokeWeight = 3;",
+        "Card with image: create Frame with auto-layout, add image Frame as child, add text area below",
+        "Unsplash URL pattern: add ?w=WIDTH&h=HEIGHT&fit=crop for optimized loading"
+      ],
+      "guards": ["Must be in editor", "URL must be accessible (CORS-free)"],
+      "why": "createImageAsync loads real photos from URLs — replaces colored rectangles as image placeholders. Works with Unsplash, any public image URL. The hash can be reused across multiple fills. Tested on rectangles, ellipses, and frames."
+    },
+    "svg_import": {
+      "description": "Import real SVG icons and shapes into Figma",
+      "steps": [
+        "Import SVG: const node = figma.createNodeFromSvg('<svg xmlns=\"http://www.w3.org/2000/svg\" ...>...</svg>');",
+        "Resize: node.resize(28, 28);",
+        "Recolor SVG: traverse children recursively, set fills and strokes on each path/shape",
+        "Recolor function: function recolorSvg(node, color) { if ('fills' in node) node.fills = node.fills.map(f => ({...f, color})); if ('strokes' in node) node.strokes = node.strokes.map(s => ({...s, color})); if ('children' in node) for (const c of node.children) recolorSvg(c, color); }",
+        "Lucide icons: use SVG strings from Lucide icon library (stroke-based, 24x24 viewBox)",
+        "Complex shapes: hexagons, circuit boards, abstract patterns — all work as SVG strings",
+        "MUST include xmlns='http://www.w3.org/2000/svg' in the SVG string"
+      ],
+      "guards": ["Must be in editor", "SVG must have xmlns attribute"],
+      "why": "createNodeFromSvg replaces emoji icons completely. Import any SVG string — Lucide, Heroicons, custom shapes. Returns a FrameNode containing vector children that can be recolored programmatically. Tested with 8 Lucide icons + 3 complex multi-element SVGs."
+    },
+    "gradient_types": {
+      "description": "Create radial, angular, and diamond gradients for advanced visual effects",
+      "steps": [
+        "Radial glow: fills=[{type:'GRADIENT_RADIAL', gradientTransform:[[0.5,0,0.25],[0,0.5,0.25]], gradientStops:[{position:0,color:{r:0.6,g:0.2,b:1,a:0.8}},{position:1,color:{r:0,g:0,b:0,a:0}}]}]",
+        "Angular/Conic: type:'GRADIENT_ANGULAR' — creates rainbow sweep or conic gradient",
+        "Diamond: type:'GRADIENT_DIAMOND' — creates diamond-shaped radial falloff",
+        "Multi-layer fills: node.fills = [solidBg, radialGlow1, radialGlow2, radialGlow3] — stack unlimited",
+        "GradientTransform: [[scaleX, 0, translateX], [0, scaleY, translateY]] — values 0-1 relative to node bounds",
+        "Centering: [[0.5, 0, 0.25], [0, 0.5, 0.25]] centers a gradient with 50% scale"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Radial gradients replace LAYER_BLUR hacks for glow effects. Multi-layer stacked radials create beautiful nebula/aurora backgrounds. Angular gradients create conic sweeps. Diamond creates unique jewel-like falloffs. gradientTransform is a 2x3 affine matrix controlling position and scale."
+    },
+    "components_and_variants": {
+      "description": "Create reusable components with state variants and interactive prototyping",
+      "steps": [
+        "Create component: const comp = figma.createComponent(); comp.name = 'State=Default';",
+        "Create variants: make multiple components with 'PropertyName=Value' naming convention",
+        "Combine: const set = figma.combineAsVariants([default, hover, active, disabled], figma.currentPage);",
+        "Variant set name: set.name = 'Button'; — Figma auto-adds padding and layout",
+        "Instance: const inst = defaultComp.createInstance(); parentFrame.appendChild(inst);",
+        "Interactive: comp.reactions = [{trigger:{type:'ON_HOVER'}, actions:[{type:'NODE', destinationId:hoverComp.id, navigation:'CHANGE_TO', transition:{type:'SMART_ANIMATE', easing:{type:'EASE_OUT'}, duration:0.15}}]}];",
+        "Variant naming: 'State=Default', 'Size=Large', 'Type=Primary' — Figma parses Property=Value format"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Components make designs reusable. combineAsVariants groups them into a variant set. ON_HOVER + CHANGE_TO + SMART_ANIMATE creates interactive hover states in prototype mode. Instances inherit changes from the main component. Note: variant set is placed on the PAGE, not inside the test frame — it's a top-level node."
+    },
+    "blend_modes": {
+      "description": "Apply blend modes for visual depth and atmosphere",
+      "steps": [
+        "On node: node.blendMode = 'SCREEN'; — applies to entire layer",
+        "Per fill: node.fills = [{type:'SOLID', color:{...}, blendMode:'MULTIPLY'}];",
+        "Key modes for UI: SCREEN (glow/light), MULTIPLY (shadows/tint), OVERLAY (contrast boost), SOFT_LIGHT (subtle contrast)",
+        "Creative modes: DIFFERENCE (psychedelic), EXCLUSION (muted), COLOR_DODGE (intense brighten), LUMINOSITY (brightness only)",
+        "Best practice: layer a colored rectangle with blend mode OVER a photo for color grading effects",
+        "19 modes total: PASS_THROUGH, NORMAL, DARKEN, MULTIPLY, LINEAR_BURN, COLOR_BURN, LIGHTEN, SCREEN, LINEAR_DODGE, COLOR_DODGE, OVERLAY, SOFT_LIGHT, HARD_LIGHT, DIFFERENCE, EXCLUSION, HUE, SATURATION, COLOR, LUMINOSITY"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Blend modes add visual depth that's impossible with plain fills. SCREEN mode over dark backgrounds creates glowing light effects. MULTIPLY tints photos. Tested 8 modes over a real photo background — all work correctly."
+    },
+    "boolean_operations": {
+      "description": "Combine shapes into custom forms via boolean operations",
+      "steps": [
+        "Union: figma.union([shape1, shape2], parentFrame); — combines shapes",
+        "Subtract: figma.subtract([base, cutout], parentFrame); — removes cutout from base",
+        "Intersect: figma.intersect([shape1, shape2], parentFrame); — keeps only overlap",
+        "Exclude: figma.exclude([shape1, shape2], parentFrame); — keeps non-overlapping areas",
+        "Result is a BooleanOperationNode — set fills on the result, not the original shapes",
+        "Badge cutout pattern: subtract a circle from a rect to create a notification badge notch",
+        "Shapes must be siblings in the same parent before boolean operation"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Boolean operations create custom shapes from primitives. The badge cutout pattern (subtract circle from rect) is a common UI pattern for notification indicators. All 4 operations tested and working."
+    },
+    "masks": {
+      "description": "Clip images and content into custom shapes using masks",
+      "steps": [
+        "Create mask shape: const mask = figma.createStar(); mask.resize(180,180); mask.isMask = true;",
+        "Add to parent: parentFrame.appendChild(mask);",
+        "Add content AFTER mask: parentFrame.appendChild(imageNode); — subsequent siblings get masked",
+        "Shape options: createStar(), createPolygon() (set .pointCount=6 for hex), createRectangle() (set .cornerRadius=40 for squircle), createEllipse()",
+        "Parent must have clipsContent = true for clean edges",
+        "Order matters: mask FIRST, then content. Content must be a sibling (same parent level)"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Masks clip images into any shape — star, hexagon, squircle, custom vector. Tested with real Unsplash images inside star, hex, and squircle masks. Key: isMask=true on the shape, then image as next sibling."
+    },
+    "vector_paths": {
+      "description": "Create custom shapes from SVG path data",
+      "steps": [
+        "Create: const vec = figma.createVector();",
+        "Set path: vec.vectorPaths = [{windingRule:'NONZERO', data:'M 0 0 L 100 0 L 100 100 Z'}];",
+        "Path format: standard SVG path commands (M, L, C, Q, Z) with SPACE-separated coordinates",
+        "CRITICAL: Use spaces between coordinates, NOT commas — 'M 50 0 L 20 55' NOT 'M 50,0 L 20,55'",
+        "Fills: vec.fills = [{type:'SOLID', color:{r:1,g:0.8,b:0}}];",
+        "Resize: vec.resize(100, 100); — scales the vector",
+        "Fallback: if vectorPaths fails, use figma.createNodeFromSvg() with the path in an SVG wrapper"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Vector paths create arbitrary shapes from path data. Figma's path parser is STRICT — no commas between coordinates (unlike browser SVG). If path parsing fails, wrap in <svg> and use createNodeFromSvg as reliable fallback. Tested: lightning, arrow, chevron, cross, ribbon shapes."
+    },
+    "text_range_styles": {
+      "description": "Apply mixed typography within a single text node",
+      "steps": [
+        "Mixed sizes: text.setRangeFontSize(startIndex, endIndex, 48);",
+        "Mixed weights: text.setRangeFontName(0, 10, {family:'Inter', style:'Extra Bold'});",
+        "Mixed colors: text.setRangeFills(0, 10, [{type:'SOLID', color:{r:0.5,g:0.3,b:1}}]);",
+        "Underline: text.setRangeTextDecoration(0, 15, 'UNDERLINE');",
+        "Strikethrough: text.setRangeTextDecoration(20, 33, 'STRIKETHROUGH');",
+        "Text case: text.setRangeTextCase(0, 9, 'UPPER'); — also 'LOWER', 'TITLE', 'ORIGINAL'",
+        "Letter spacing: text.setRangeLetterSpacing(0, 5, {value:-1, unit:'PIXELS'});",
+        "All range methods take (startIndex, endIndex) — endIndex is exclusive"
+      ],
+      "guards": ["Must be in editor", "Font must be loaded for each style used"],
+      "why": "Range styles allow rich text within one node — highlighted keywords, mixed weights, colored segments. All setRange* methods use character indices (0-based, end exclusive). Must load all font weights used across ranges."
+    },
+    "design_tokens": {
+      "description": "Create reusable paint and text styles (design tokens)",
+      "steps": [
+        "Paint style: const style = figma.createPaintStyle(); style.name = 'Brand/Primary'; style.paints = [{type:'SOLID', color:{r:0.4,g:0.3,b:1}}];",
+        "Apply: node.fillStyleId = style.id;",
+        "Text style: const ts = figma.createTextStyle(); ts.name = 'Typography/Heading'; ts.fontSize = 32; ts.fontName = {family:'Inter', style:'Bold'};",
+        "Apply: textNode.textStyleId = ts.id;",
+        "Naming convention: use 'Category/Name' format — e.g. 'Brand/Primary', 'Typography/Display'",
+        "Additional text style properties: ts.letterSpacing, ts.lineHeight, ts.paragraphSpacing",
+        "Styles appear in Figma's style panel and can be reused across the file"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Design tokens make designs consistent and maintainable. Paint styles define reusable colors. Text styles define reusable typography. Both applied via styleId. Tested: 5 paint styles (Brand/*) + 5 text styles (Typography/*)."
+    },
+    "constraints": {
+      "description": "Set responsive constraints for elements within frames",
+      "steps": [
+        "Set: node.constraints = {horizontal:'CENTER', vertical:'MIN'};",
+        "Horizontal: 'MIN' (left), 'CENTER', 'MAX' (right), 'STRETCH' (full width), 'SCALE' (proportional)",
+        "Vertical: 'MIN' (top), 'CENTER', 'MAX' (bottom), 'STRETCH' (full height), 'SCALE'",
+        "STRETCH makes element fill parent width/height when parent resizes",
+        "SCALE makes element resize proportionally with parent",
+        "Only works on children of non-auto-layout frames (auto-layout uses layoutSizing instead)"
+      ],
+      "guards": ["Must be in editor", "Parent must not be auto-layout"],
+      "why": "Constraints define how elements respond when parent frame resizes. Essential for responsive design. Note: auto-layout frames use layoutSizingHorizontal/Vertical instead of constraints."
+    },
+    "export": {
+      "description": "Export a node as PNG, JPG, SVG, or PDF",
+      "steps": [
+        "Get bytes: const bytes = await node.exportAsync({format:'PNG', constraint:{type:'SCALE',value:2}});",
+        "Supported formats: 'PNG', 'JPG', 'SVG', 'PDF'",
+        "Returns Uint8Array — check bytes.length for size validation",
+        "Use constraint {type:'SCALE',value:2} for 2x resolution export"
+      ],
+      "guards": ["Must be in editor", "Node must exist"],
+      "why": "Export API returns raw bytes for any node in any format. Use for asset export, QA snapshots, or downstream processing."
+    },
+    "shared_plugin_data": {
+      "description": "Store and retrieve metadata on nodes via SharedPluginData",
+      "steps": [
+        "Write: node.setSharedPluginData('my_namespace', 'key', 'value');",
+        "Read: node.getSharedPluginData('my_namespace', 'key');",
+        "List keys: node.getSharedPluginDataKeys('my_namespace');",
+        "GOTCHA: namespace must be alphanumeric, _ or . only — NO hyphens"
+      ],
+      "guards": ["Must be in editor", "Namespace must be valid (alphanumeric/_ only)"],
+      "why": "SharedPluginData works without plugin ID. Private setPluginData requires plugin context."
+    },
+    "layout_grids": {
+      "description": "Add column, row, or pixel grids to frames",
+      "steps": [
+        "Column grid: {pattern:'COLUMNS', alignment:'STRETCH', count:12, gutterSize:20, offset:40, visible:true, color:{r:1,g:0,b:0,a:0.1}}",
+        "Row grid: {pattern:'ROWS', alignment:'STRETCH', count:6, gutterSize:16, offset:20}",
+        "Pixel grid: {pattern:'GRID', sectionSize:8, visible:true}",
+        "Stack multiple: frame.layoutGrids = [columnsGrid, rowsGrid, pixelGrid];",
+        "GOTCHA: sectionSize is ONLY for pattern:'GRID'. COLUMNS/ROWS use count, gutterSize, offset"
+      ],
+      "guards": ["Must be in editor", "Target must be a frame"],
+      "why": "Layout grids provide visual spacing guides. Multiple grids can be stacked for comprehensive grid systems."
+    },
+    "overlay_interactions": {
+      "description": "Create modal and tooltip overlays via reactions API",
+      "steps": [
+        "Create overlay content (modal/tooltip) as a separate frame or component",
+        "Set reaction: node.reactions = [{trigger:{type:'ON_CLICK'}, actions:[{type:'NODE', destinationId:overlayId, navigation:'OVERLAY', transition:{type:'DISSOLVE', easing:{type:'EASE_OUT'}, duration:0.3}, resetVideoPosition:false}]}];",
+        "Use ON_HOVER trigger for tooltips, ON_CLICK for modals",
+        "GOTCHA: use resetVideoPosition NOT preserveScrollPosition"
+      ],
+      "guards": ["Must be in editor", "Overlay content must exist as separate node"],
+      "why": "OVERLAY navigation shows content on top of current screen without navigating away. Essential for modals, tooltips, drawers."
+    },
+    "component_properties": {
+      "description": "Add text and boolean properties to components",
+      "steps": [
+        "Add property: comp.addComponentProperty('title', 'TEXT', 'Default Value');",
+        "Get full key: const defs = comp.componentPropertyDefinitions; const key = Object.keys(defs).find(k => k.startsWith('title#'));",
+        "Link to text node: textNode.componentPropertyReferences = {characters: key};",
+        "Set on instance: instance.setProperties({[key]: 'Custom Value'});",
+        "GOTCHA: property keys include #id suffix — must read from componentPropertyDefinitions"
+      ],
+      "guards": ["Must be in editor", "Node must be a component"],
+      "why": "Component properties make components configurable. TEXT props drive text content, BOOLEAN props show/hide elements."
+    },
+    "variables": {
+      "description": "Create variable collections and bind variables to nodes",
+      "steps": [
+        "Create collection: const col = figma.variables.createVariableCollection('Tokens');",
+        "Rename mode: col.renameMode(col.modes[0].modeId, 'Light');",
+        "Create variable: const v = figma.variables.createVariable('primary', col, 'COLOR');",
+        "Set value: v.setValueForMode(col.modes[0].modeId, {r:0.4,g:0.2,b:1,a:1});",
+        "Bind to node: node.setBoundVariable('fills', 0, v);",
+        "Types: COLOR, FLOAT, STRING, BOOLEAN",
+        "LIMITATION: addMode fails on free plan ('Limited to 1 modes only')"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Variables are the foundation for design tokens. Bind colors, spacing, and text to variables for systematic design."
     },
     "select_tool": {
       "description": "Activate a toolbar tool (Move, Frame, Rectangle, Pen, Text, Comment)",
@@ -223,12 +551,16 @@
       "steps": [
         "Select the target layer first (see select_layer flow)",
         "Find the input: e.g. input[aria-label='X-position']",
-        "Use browser_fill_form with clear:true to type new value",
-        "Press Enter to commit: dispatch keydown Enter event on the input",
+        "PREFERRED METHOD: Use JS select() + execCommand('insertText') — this reliably replaces the value:",
+        "  input.focus(); input.select(); document.execCommand('insertText', false, 'newValue');",
+        "  input.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, bubbles:true}));",
+        "ALTERNATIVE: browser_fill_form with clear:true — but WARNING: clear:true sometimes doesn't clear, causing value appending (e.g. '100' + '390' = '100390')",
+        "For Color input: same select()+execCommand pattern. Color values are 6-char hex without #",
+        "For Font size: same pattern. Use Tab instead of Enter to commit",
         "Verify: re-read input value matches new value"
       ],
       "guards": ["Must have a selection"],
-      "why": "browser_fill_form with CDP key events works reliably on Figma's property inputs. The value commits on Enter or blur."
+      "why": "browser_fill_form clear:true is unreliable on some Figma inputs — it appends instead of replacing. The JS select()+execCommand('insertText') pattern always works because it explicitly selects all text first. Tab key works more reliably than Enter for committing some property values."
     },
     "open_share_dialog": {
       "description": "Open the Share dialog",
@@ -279,23 +611,170 @@
         "Click Present button: browser_human_click on [data-testid='present-as-prototype']",
         "Prototype opens in new tab or overlay"
       ]
+    },
+    "plugin_install_and_run": {
+      "description": "Find, save (install), and run Figma plugins from within the editor using the Actions panel",
+      "steps": [
+        "STEP 1 — Open Actions panel: click button[aria-label='Actions'] in the BOTTOM TOOLBAR (the '/' icon). Two may exist in DOM — pick the visible one (getBoundingClientRect().width > 0). Panel class: .quick_actions--qaV2Window--EtP7F",
+        "STEP 2 — Switch to Plugins tab: click the 'Plugins & widgets' tab inside the quick actions panel",
+        "STEP 3 — Search for plugin: type plugin name into .search--searchInput--k55la using browser_fill_form. Results update live from Figma Community",
+        "STEP 4 — If results show 'Search plugins & widgets for X': click that row to search Figma Community from within the editor",
+        "STEP 5 — Click plugin result row: opens detail view with plugin description, user count, and two buttons: 'Save ⌘⏎' and 'Run ⏎'",
+        "STEP 6 — Save plugin: click 'Save' to permanently add to your account. It returns to results list (save was successful). Plugin now appears in right-click > Plugins > Saved plugins",
+        "STEP 7 — Run plugin: click plugin result again → click 'Run ⏎' button. Quick actions panel closes and plugin iframe appears (src='/plugin-sandbox', typically 348×670px)",
+        "RE-RUN: Cmd+Option+P (Mac) / Ctrl+Alt+P (Windows) re-runs last plugin",
+        "CONTEXT MENU: right-click canvas → Plugins → saved plugins list → click plugin name to run",
+        "COMMUNITY PAGE: 'Open in' button → select file from 'Recent files' dropdown → opens file in new tab. UNRELIABLE for auto-launching plugin — use Actions method instead"
+      ],
+      "guards": ["Must be in editor with canvas loaded", "Must be logged into Figma account"],
+      "why": "Plugin management in Figma UI3 (2025+) moved from old 'Resources' header to 'Actions' bottom toolbar button. The Actions > Plugins & widgets > Search > Save/Run flow is the most reliable. Community page 'Open in' opens the file but may not auto-run the plugin. Plugin UIs run inside sandboxed /plugin-sandbox iframes — parent page JS CANNOT access iframe content. Use screenshot or OCR to read plugin UI."
+    },
+    "plugin_ui_interaction": {
+      "description": "Interact with a running Figma plugin's UI (which runs in a sandboxed iframe)",
+      "steps": [
+        "Plugin iframe: src='https://www.figma.com/plugin-sandbox', visible when running (width > 50, height > 50)",
+        "CANNOT read iframe content via parent page JS (cross-origin sandbox restriction)",
+        "To see plugin UI: use screenshot or OCR tool",
+        "To click inside plugin: use browser_human_click with coordinates from screenshot/OCR (clicks pass through to iframe via CDP)",
+        "To type in plugin inputs: click the input first via coordinates, then use type_text or browser_fill_form",
+        "Plugin communicates with Figma via figma.ui.postMessage / figma.ui.onmessage — these are internal and not accessible",
+        "To close plugin: press Escape (via key tool) or click X in plugin window header",
+        "Plugin toast: while running, Figma shows a toast notification at bottom of editor"
+      ],
+      "guards": ["Plugin must be running (visible iframe)"],
+      "why": "Plugin UIs are fully sandboxed — no DOM access from parent. All interaction must go through visual methods (screenshot + coordinates). CDP mouse events DO pass through to the iframe correctly."
+    },
+    "parallax_effect": {
+      "description": "Create parallax-like motion with Smart Animate between matched layers at different offsets",
+      "steps": [
+        "Create Frame A and Frame B (same dimensions)",
+        "Add 3 layers with SAME names in both frames: 'bg-layer' (slow), 'mid-layer' (medium), 'fg-text' (fast)",
+        "In Frame B, offset each layer differently: bg moves 20px, mid moves 100px, fg moves 200px",
+        "Connect: frameA.reactions = [{trigger:{type:'ON_CLICK'}, actions:[{type:'NODE', destinationId:frameB.id, navigation:'NAVIGATE', transition:{type:'SMART_ANIMATE', easing:{type:'EASE_IN_AND_OUT'}, duration:0.8}}]}]",
+        "Smart Animate interpolates each matched layer independently — creates parallax depth effect"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Parallax is a visual illusion where background moves slower than foreground. Smart Animate auto-detects matching layer names and interpolates position/opacity/size/color independently. Duration 0.6-1.0s works best for parallax feel."
+    },
+    "scroll_overflow": {
+      "description": "Create scrollable frames with horizontal, vertical, or 2D panning",
+      "steps": [
+        "Vertical scroll: frame.clipsContent = true; frame.overflowDirection = 'VERTICAL'; add content taller than frame",
+        "Horizontal scroll: frame.overflowDirection = 'HORIZONTAL'; add wide auto-layout row with cards inside",
+        "2D pan (map-like): frame.overflowDirection = 'BOTH'; add large content frame (800x800) inside smaller viewport (390x300)",
+        "Sticky nav: set parent to layoutMode='VERTICAL', then child.layoutPositioning = 'ABSOLUTE' + constraints={horizontal:'STRETCH', vertical:'MIN'}",
+        "overflowDirection options: 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'BOTH'"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Scroll behavior is set per-frame. clipsContent=true clips overflow. overflowDirection controls which axes scroll in prototype mode. For sticky elements, parent MUST have layoutMode set before child can use layoutPositioning='ABSOLUTE'."
+    },
+    "animation_triggers_reference": {
+      "description": "Complete reference of all prototype trigger types tested via Plugin API",
+      "steps": [
+        "WORKING TRIGGERS (11): ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, ON_MEDIA_END, AFTER_TIMEOUT({timeout:ms}), MOUSE_ENTER({delay:0}), MOUSE_LEAVE({delay:0}), MOUSE_UP({delay:0}), MOUSE_DOWN({delay:0}), ON_KEY_DOWN({device:'KEYBOARD',keyCodes:[32]}), ON_MEDIA_HIT({mediaHitTime:seconds})",
+        "WORKING TRANSITIONS (2): DISSOLVE, SMART_ANIMATE",
+        "WORKING NAVIGATIONS (5): NAVIGATE, SWAP, OVERLAY, CHANGE_TO (variants only), SCROLL_TO (null transition only)",
+        "WORKING EASINGS (12): EASE_IN, EASE_OUT, EASE_IN_AND_OUT, LINEAR, EASE_IN_BACK, EASE_OUT_BACK, EASE_IN_AND_OUT_BACK, GENTLE, QUICK, BOUNCY, SLOW, CUSTOM_SPRING",
+        "WORKING ACTIONS (3): NODE (navigate/overlay/swap/change), BACK, URL({url:'https://...'})",
+        "PAID PLAN ONLY: SET_VARIABLE, multiple actions per trigger, conditionals",
+        "NOT WORKING transitions: SCROLL_ANIMATE, MOVE_IN, MOVE_OUT, PUSH, SLIDE_IN, SLIDE_OUT",
+        "NOT WORKING easings: CUSTOM_BEZIER (all formats), SPRING, GENTLE_SPRING",
+        "ON_KEY_DOWN format: {type:'ON_KEY_DOWN', device:'KEYBOARD', keyCodes:[32]} — keyCode 32=space. NOT 'KEY_DOWN'"
+      ],
+      "guards": ["Must be in editor"],
+      "why": "Comprehensive tested reference. Previous sessions only tested ON_CLICK/ON_HOVER/ON_PRESS/AFTER_TIMEOUT. This session tested ALL trigger types. MOUSE_ENTER/LEAVE now confirmed WORKING (previous session said broken — they need delay:0 property). ON_KEY_DOWN needs device+keyCodes (was trying wrong type name before)."
     }
   },
 
   "tool_preferences": {
+    "BEST_APPROACH": "For creating designs with multiple elements, use Figma Plugin API via browser_js (see programmatic_design flow). This bypasses all canvas interaction issues.",
     "toolbar_clicks": ["browser_human_click"],
-    "canvas_interactions": ["browser_human_click (creates shapes)", "browser_human_click cannot drag — use native drag or CDP mouse sequences for custom sizes"],
+    "canvas_interactions": ["browser_human_click (creates shapes)", "browser_human_click cannot drag — use native drag or CDP mouse sequences for custom sizes", "browser_human_click always clicks at element center — cannot target specific canvas positions"],
     "layer_selection": ["browser_human_click on layer rows"],
-    "property_editing": ["browser_fill_form (clear:true) + Enter keydown"],
+    "property_editing": ["JS select()+execCommand('insertText')+Enter/Tab (PREFERRED)", "browser_fill_form (clear:true) + Enter keydown (UNRELIABLE — may append instead of replace)"],
     "menu_navigation": ["browser_human_click to open, browser_js to read items quickly"],
+    "file_creation": ["JS .click() on new-design-file-button (browser_human_click does NOT work)"],
     "file_opening": ["JS dblclick event sequence on thumbnail container"],
-    "data_extraction": ["browser_js — query data-testid elements, aria-labels, input values"],
+    "file_renaming": ["browser_human_click on [data-testid='filename'], then browser_fill_form on input[aria-label='Figma Design']"],
+    "programmatic_design": ["browser_js with Figma Plugin API: figma.createFrame(), figma.createText(), figma.createRectangle(), figma.createEllipse()"],
+    "auto_layout": ["frame.layoutMode='VERTICAL'|'HORIZONTAL', itemSpacing, padding*, primaryAxisAlignItems, counterAxisAlignItems, layoutWrap='WRAP'. GOTCHA: set layoutSizingHorizontal='FILL' AFTER appending child to auto-layout parent"],
+    "image_fills": ["const img = await figma.createImageAsync(url); node.fills = [{type:'IMAGE', imageHash:img.hash, scaleMode:'FILL'}]; — works on rect, ellipse, frame"],
+    "svg_icons": ["figma.createNodeFromSvg('<svg xmlns=\"http://www.w3.org/2000/svg\" ...>...</svg>') — returns FrameNode, recolor via recursive child traversal"],
+    "gradient_effects": ["GRADIENT_RADIAL for glows, GRADIENT_ANGULAR for conic sweeps, GRADIENT_DIAMOND for jewel effects, multi-layer stacked fills for nebula backgrounds"],
+    "glassmorphism": ["BACKGROUND_BLUR (real backdrop-filter) + semi-transparent fill + white stroke + inner shadow = glass card. Three variants: light (white 10%), dark (black 30%), tinted (brand 15%)"],
+    "components": ["figma.createComponent() + combineAsVariants([...]) for variant sets. ON_HOVER + CHANGE_TO + SMART_ANIMATE for interactive states. createInstance() for reuse"],
+    "blend_modes": ["node.blendMode = 'SCREEN'|'MULTIPLY'|'OVERLAY'|... — 19 modes. SCREEN for glows, MULTIPLY for shadows, OVERLAY for contrast"],
+    "boolean_ops": ["figma.union/subtract/intersect/exclude([shapes], parent) — creates custom shapes. Badge cutout = subtract circle from rect"],
+    "masks": ["shape.isMask = true; then siblings get masked. Star/hex/squircle + image = shaped photos"],
+    "vector_paths": ["figma.createVector().vectorPaths = [{windingRule:'NONZERO', data:'M x y L x y Z'}] — NO COMMAS between coords. Fallback: createNodeFromSvg"],
+    "text_range_styles": ["setRangeFontSize/FontName/Fills/TextDecoration/TextCase/LetterSpacing(start, end, value) — mixed typography in one node"],
+    "design_tokens": ["figma.createPaintStyle() + node.fillStyleId, figma.createTextStyle() + node.textStyleId — reusable styles with Category/Name naming"],
+    "constraints": ["node.constraints = {horizontal:'STRETCH', vertical:'MIN'} — MIN/CENTER/MAX/STRETCH/SCALE. Only for non-auto-layout parents"],
+    "export": ["node.exportAsync({format:'PNG'|'JPG'|'SVG'|'PDF', constraint:{type:'SCALE',value:2}}) returns Uint8Array. All 4 formats work"],
+    "shared_plugin_data": ["node.setSharedPluginData(namespace, key, value) — namespace must be alphanumeric/_ only. getSharedPluginData + getSharedPluginDataKeys. Private setPluginData requires plugin ID"],
+    "layout_grids": ["frame.layoutGrids = [{pattern:'COLUMNS', count:12, gutterSize:20, offset:40}]. ROWS for row grid. GRID + sectionSize for pixel grid. Multiple grids stackable. GOTCHA: sectionSize only for GRID"],
+    "overlay_interactions": ["navigation:'OVERLAY' with transition:{type:'DISSOLVE'} for modals/tooltips. ON_CLICK for modal, ON_HOVER for tooltip. resetVideoPosition (NOT preserveScrollPosition)"],
+    "trigger_types": ["API-working (12): ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, ON_MEDIA_END, AFTER_TIMEOUT, MOUSE_ENTER(delay:0), MOUSE_LEAVE(delay:0), MOUSE_UP(delay:0), MOUSE_DOWN(delay:0), ON_KEY_DOWN(device+keyCodes), ON_MEDIA_HIT(mediaHitTime). Previous session wrongly reported MOUSE_ENTER/LEAVE/UP/DOWN as broken — they need {delay:0}"],
+    "toggle_interactive": ["Two variants State=Off/On. ON_CLICK + CHANGE_TO both directions + SMART_ANIMATE 0.2s. Off: gray bg + knob left. On: blue bg + knob right (primaryAxisAlignItems MAX)"],
+    "tab_switch": ["N variants Tab=Tab1/Tab2/Tab3. Tab bar buttons: non-active → ON_CLICK + CHANGE_TO target variant. SMART_ANIMATE moves active indicator. Each variant has unique content area"],
+    "dropdown_menu": ["Button comp ON_CLICK → OVERLAY navigation to menu frame. Menu: vertical auto-layout with item rows. DISSOLVE 0.15s. Menu frame lives on page level (not inside button)"],
+    "carousel": ["N slide variants Slide=Slide1/2/3. Prev/Next buttons with CHANGE_TO adjacent variant. Dot indicators (opacity 1 vs 0.3). SMART_ANIMATE 0.3s for smooth slide transitions"],
+    "fixed_header": ["Scrollable frame: clipsContent=true + overflowDirection='VERTICAL'. Header child: constraints={horizontal:'STRETCH',vertical:'MIN'}. Content child: tall frame below header"],
+    "sections_and_pages": ["createSection for canvas organization (has fills, contains frames). createPage for multi-page files. createSlice for export regions with exportSettings array"],
+    "component_properties": ["comp.addComponentProperty(name, 'TEXT'|'BOOLEAN', default). Link via componentPropertyReferences with full key#id from componentPropertyDefinitions. instance.setProperties({[fullKey]:value})"],
+    "variables": ["figma.variables.createVariableCollection + createVariable(name, collection, 'COLOR'|'FLOAT'|'STRING'|'BOOLEAN'). setBoundVariable('fills', 0, var). renameMode works. addMode: paid plan only"],
+    "effects_and_shadows": ["element.effects = [{type:'DROP_SHADOW'|'INNER_SHADOW'|'LAYER_BLUR'|'BACKGROUND_BLUR', ...}] — stack unlimited effects"],
+    "ambient_glow_orbs": ["Ell with low opacity (0.03-0.06) + LAYER_BLUR radius 120-200 — creates cinematic depth"],
+    "prototype_setup": ["frame.reactions for interactions, page.flowStartingPoints for starting point, SMART_ANIMATE for transitions"],
+    "scrollable_website": ["Single tall frame (1440x7200) with clipsContent=true — scrolls in prototype mode like real website"],
+    "design_reference": ["Extract video frames with ffmpeg (fps=2), view as images to analyze design patterns before building"],
+    "data_extraction": ["browser_js — query data-testid elements, aria-labels, input values, layer panel rows"],
+    "canvas_text_typing": ["Activate Text tool → browser_human_click canvas → focus Chrome → type_text (native OS typing). BUT: browser_human_click always clicks canvas center, so repeated text elements land on same spot. Use Plugin API instead."],
+    "plugin_install": ["Actions button (bottom toolbar, aria-label='Actions') → 'Plugins & widgets' tab → search → Save. Then right-click canvas → Plugins → Saved plugins → click to run. Or: click plugin result → 'Run ⏎' button. Re-run last: Cmd+Option+P"],
+    "plugin_interaction": ["Plugin UI is sandboxed iframe (src=/plugin-sandbox). Cannot read via JS. Use screenshot/OCR to see content, browser_human_click with coordinates to click, type_text to type. Close with Escape key"],
+    "parallax": ["Two frames with matched layer names at different offsets + SMART_ANIMATE 0.8s. Bg moves slow, fg moves fast. Click or AFTER_TIMEOUT to trigger"],
+    "scroll_overflow": ["frame.clipsContent=true + overflowDirection='VERTICAL'|'HORIZONTAL'|'BOTH'. Sticky: parent.layoutMode='VERTICAL' + child.layoutPositioning='ABSOLUTE' + constraints"],
+    "all_triggers": ["12 trigger types, all set via API: ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG (inconsistent in prototype), ON_MEDIA_END, AFTER_TIMEOUT({timeout:ms}), MOUSE_ENTER({delay:0}), MOUSE_LEAVE({delay:0}), MOUSE_UP({delay:0}), MOUSE_DOWN({delay:0}), ON_KEY_DOWN({device:'KEYBOARD',keyCodes:[32]}), ON_MEDIA_HIT({mediaHitTime:seconds}). Mouse triggers need {delay:0}. ON_KEY_DOWN needs device+keyCodes. 32=space, 13=enter, 27=escape"],
+    "all_easings": ["12 working: EASE_IN, EASE_OUT, EASE_IN_AND_OUT, LINEAR, EASE_IN_BACK, EASE_OUT_BACK, EASE_IN_AND_OUT_BACK, GENTLE, QUICK, BOUNCY, SLOW, CUSTOM_SPRING. Failed: CUSTOM_BEZIER, SPRING, GENTLE_SPRING"],
+    "all_transitions": ["2 working: DISSOLVE, SMART_ANIMATE. Failed: SCROLL_ANIMATE, MOVE_IN, MOVE_OUT, PUSH, SLIDE_IN, SLIDE_OUT"],
+    "all_navigations": ["5 working: NAVIGATE, SWAP, OVERLAY (any frame), CHANGE_TO (component variants only), SCROLL_TO (null transition only). SCROLL_TO needs: {navigation:'SCROLL_TO', transition:null}"],
+    "all_actions": ["NODE (with navigation), BACK (dismiss overlay), URL (open link). Paid only: SET_VARIABLE, CONDITIONAL, multiple actions per trigger"],
+    "gif_import": ["const gif = await figma.createImageAsync('https://media.giphy.com/...gif'); frame.fills = [{type:'IMAGE', imageHash:gif.hash, scaleMode:'FIT'}] — loads animated GIF. Plays in prototype mode"],
+    "auto_advance": ["AFTER_TIMEOUT trigger: {type:'AFTER_TIMEOUT', timeout:2000} — auto-navigates after N ms. Good for loading screens, onboarding, slideshows"],
+    "keyboard_trigger": ["ON_KEY_DOWN: {type:'ON_KEY_DOWN', device:'KEYBOARD', keyCodes:[32]} — keyCode 32=space, 13=enter, 27=escape. MUST include device property"],
+    "video_triggers": ["ON_MEDIA_END: fires when video in frame finishes. ON_MEDIA_HIT: {type:'ON_MEDIA_HIT', mediaHitTime:5} fires at timestamp (seconds). Good for chapter markers, timed overlays"],
+    "saved_plugins": ["Anima (code export), Vectary 3D Studio Lite (3D models), LottieFiles (Lottie animations), Jitter (motion design). All saved via Actions > Plugins & widgets > Search > Save flow"],
     "NOT_WORKING": [
       "JS dispatchEvent MouseEvent on canvas (WebGL ignores DOM events)",
       "JS KeyboardEvent for keyboard shortcuts (Figma intercepts at lower level)",
       "JS Escape to close dialogs (doesn't reach Figma's event handler)",
       "native drag (bridge timeout on macOS)",
-      "screenshot (cg.captureScreen timeout)"
+      "screenshot (cg.captureScreen timeout)",
+      "browser_human_click on new-design-file-button (click registers but file not created)",
+      "browser_fill_form clear:true on some property inputs (appends instead of replacing)",
+      "session_start + navigate for Figma (use browser_* tools directly, no session needed)",
+      "Figma MCP token can expire mid-session — get_screenshot/get_design_context fail with 're-authorization' error",
+      "vectorPaths with commas between coordinates — Figma path parser rejects 'M 50,0' format, use 'M 50 0' spaces only",
+      "setPluginData without plugin ID — requires plugin context, use setSharedPluginData instead",
+      "SharedPluginData namespace with hyphens — 'my-ns' fails, use 'my_ns' (alphanumeric + _ or . only)",
+      "layoutGrids sectionSize on COLUMNS/ROWS pattern — sectionSize only valid for GRID pattern",
+      "ON_DRAG trigger — sets on frame (reactions count=1) but behavior is inconsistent in prototype mode",
+      "MOVE_IN/MOVE_OUT/SLIDE_IN/SLIDE_OUT/PUSH/SCROLL_ANIMATE transition types — not valid in current reactions API, only DISSOLVE and SMART_ANIMATE work",
+      "CUSTOM_BEZIER easing — all formats tried (cubicBezier, easingFunction array) fail validation. Use named easings instead (12 available)",
+      "SPRING and GENTLE_SPRING easings — fail validation, use BOUNCY or CUSTOM_SPRING instead",
+      "SCROLL_TO with transition — fails, must use transition:null (instant scroll only)",
+      "CHANGE_TO on regular frames — only works on component variants within a variant set",
+      "SET_VARIABLE action — 'You cannot use Set Variable actions with your current plan' (requires paid plan)",
+      "Multiple actions per trigger — 'You cannot create multiple actions on Reactions with your current plan' (requires paid plan)",
+      "CONDITIONAL action — requires paid plan + format unclear via API",
+      "preserveScrollPosition in reactions — not valid property, use resetVideoPosition instead",
+      "variables.addMode on free plan — 'Limited to 1 modes only' error, requires paid Figma plan",
+      "createTextPath — returns undefined, 'Expected node, got undefined' error. Not functional via browser_js Plugin API",
+      "Community page 'Open in' button for plugins — opens file in new tab but does NOT auto-run the plugin. Use Actions panel method instead",
+      "Plugin iframe content — sandboxed iframe (src=/plugin-sandbox) blocks all parent page JS access. Cannot read or query plugin UI elements via browser_js/browser_dom. Use screenshot/OCR instead",
+      "Plugins menu via right-click when no plugins saved — only shows 'Manage plugins…' with no plugins listed. Must Save a plugin first via Actions > Plugins & widgets",
+      "Main menu > Plugins submenu expansion — JS mouseover/mouseenter events do NOT trigger submenu. Requires real mouse hover via native input. CDP click on 'Plugins' closes the entire menu. Use Actions panel (Cmd+/) or Cmd+Option+P to re-run last plugin instead",
+      "Actions panel search results sometimes render empty — input shows correct value but panel content is blank. May be a React rendering timing issue. Workaround: close panel (Escape), reopen (Cmd+/), click input, then type via native keyboard"
     ]
   },
 
@@ -347,6 +826,48 @@
       "context": "mcp__sh__drag (cg.mouseDrag) times out when trying to draw shapes by dragging on canvas",
       "solution": "Use single-click approach: activate shape tool + browser_human_click on canvas creates default 100x100 element. Resize via properties panel inputs afterward.",
       "severity": "medium"
+    },
+    {
+      "error": "browser_human_click on new-design-file-button does not create file",
+      "context": "Clicking [data-testid='new-design-file-button'] via browser_human_click — click registers at coordinates but no new file is created, page stays on file browser",
+      "solution": "Use JS .click() instead: document.querySelector('[data-testid=\"new-design-file-button\"]').click(). This triggers Figma's React click handler correctly. Then browser_wait for URL to include '/design/'.",
+      "severity": "high"
+    },
+    {
+      "error": "browser_fill_form appends instead of replacing on property inputs",
+      "context": "browser_fill_form with clear:true on Color input or Font size input appends new value to existing (e.g. 'FFFFFF' + '0F172A' = 'FFFFFF0F172A')",
+      "solution": "Use JS: input.focus(); input.select(); document.execCommand('insertText', false, 'newValue'); then dispatch Enter/Tab keydown. The select() ensures all existing text is replaced.",
+      "severity": "high"
+    },
+    {
+      "error": "browser_human_click on canvas always hits center — cannot place elements at specific positions",
+      "context": "Text tool + browser_human_click on 'canvas' always clicks at canvas element center. Creating multiple text elements places them all at the same spot, and clicking on an existing element enters edit mode instead of creating new.",
+      "solution": "Use Figma Plugin API via browser_js for precise element placement: figma.createText() then set t.x and t.y to exact coordinates. Or use mcp__sh__click with specific screen coordinates (requires focus on Chrome first), but this has VS Code focus-stealing issues.",
+      "severity": "high"
+    },
+    {
+      "error": "session_start + navigate fails with 'Session not found' for Figma",
+      "context": "Using session_start to create an AX session, then navigate(sessionId, url) — returns 'Session not found' because MCP server restarts between tool calls",
+      "solution": "Do NOT use session_start for browser automation. Use browser_tabs to get tab IDs, then browser_navigate(url, tabId) directly. Browser tools connect via CDP and don't need sessions.",
+      "severity": "critical"
+    },
+    {
+      "error": "Text typed into existing text element instead of creating new one",
+      "context": "Activating Text tool and clicking canvas center lands on an existing text element, entering edit mode. Native type_text then appends to existing text instead of creating a new text layer.",
+      "solution": "Use Figma Plugin API: figma.createText() to create text at exact positions. Or ensure you click on empty canvas area (not on any existing element) — but browser_human_click doesn't support coordinate targeting.",
+      "severity": "medium"
+    },
+    {
+      "error": "Figma MCP token expires mid-session",
+      "context": "Calling mcp__figma__get_screenshot or get_design_context returns 'MCP server figma requires re-authorization (token expired)'",
+      "solution": "Run /mcp in Claude Code to re-authenticate. The Figma MCP server uses OAuth tokens that expire. After re-auth, tools work again. As fallback, use browser_js with Figma Plugin API for design work (doesn't need MCP auth).",
+      "severity": "medium"
+    },
+    {
+      "error": "Width/height inputs missing aria-labels",
+      "context": "After creating a Frame, the properties panel shows W/H inputs but they lack aria-label='transform-width' / 'transform-height'. They appear as unlabeled inputs with value '100'.",
+      "solution": "Find W/H inputs by scanning all inputs in properties panel: look for inputs with value '100' after the X-position, Y-position, Rotation inputs. Or use Plugin API: frame.resize(width, height).",
+      "severity": "medium"
     }
   ],
 
@@ -356,30 +877,174 @@
     "layer_ids": "Layer panel rows use data-testid format '{nodeId}-layers-panel-row' where nodeId matches Figma's internal node ID (e.g. '605:11').",
     "tool_behavior": "Shape tools (Rectangle, Frame) auto-deactivate after creating one element, returning to Move tool. Text tool stays active until explicitly switched.",
     "mode_switching": "Three modes available via toolbelt-mode-segmented-control: Draw (illustration), Design, Dev Mode (handoff).",
+    "plugin_api": "The Figma Plugin API (figma.*) is accessible directly in browser_js. No plugin installation needed. FULL TESTED CAPABILITIES: Node creation (createFrame, createText, createRectangle, createEllipse, createLine, createPolygon, createStar, createVector, createComponent, createNodeFromSvg, createImageAsync). Auto Layout (layoutMode, itemSpacing, padding, sizing, alignment, layoutWrap). Fills (SOLID, GRADIENT_LINEAR, GRADIENT_RADIAL, GRADIENT_ANGULAR, GRADIENT_DIAMOND, IMAGE, multi-layer stacking). Effects (DROP_SHADOW, INNER_SHADOW, LAYER_BLUR, BACKGROUND_BLUR — stackable). Blend modes (19 types). Components (createComponent, combineAsVariants, createInstance, reactions with ON_HOVER/CHANGE_TO). Boolean ops (union, subtract, intersect, exclude). Masks (isMask=true). Vector paths (vectorPaths with SVG data). Text range styles (setRangeFontSize/FontName/Fills/TextDecoration/TextCase/LetterSpacing). Design tokens (createPaintStyle, createTextStyle, fillStyleId, textStyleId). Constraints (MIN/CENTER/MAX/STRETCH/SCALE). Prototype (reactions, flowStartingPoints, SMART_ANIMATE transitions). Viewport control. Must loadFontAsync before setting text characters.",
+    "filename_input_quirk": "When clicking [data-testid='filename'] to rename, the input that appears always has aria-label='Figma Design' regardless of the current file name.",
     "safety": [
       "Add 1-2s delays between actions to allow Figma's WebSocket sync",
       "Verify tool activation via aria-pressed before canvas interactions",
       "Always select layers via layers panel rather than canvas clicks for reliability",
-      "Use browser_fill_form with clear:true for property inputs"
+      "Use JS select()+execCommand('insertText') for property inputs (browser_fill_form clear:true is unreliable)",
+      "For complex designs, prefer Figma Plugin API via browser_js over manual canvas interactions",
+      "Never use session_start for browser-based Figma — use browser_* tools directly"
     ]
   },
 
   "_meta": {
     "created": "2026-03-09",
-    "tested_on": "Figma (browser, Chrome), macOS arm64",
+    "updated": "2026-03-09T14:00:00",
+    "tested_on": "Figma (browser, Chrome), macOS arm64, Official Figma MCP server",
     "tested_actions": [
       "file_browser_navigation",
       "open_file_via_dblclick",
+      "create_new_file_via_js_click",
+      "rename_file_via_filename_input",
       "toolbar_tool_activation",
       "create_rectangle_on_canvas",
       "create_frame_on_canvas",
       "text_tool_activation",
+      "canvas_text_typing_via_native_key",
       "layer_selection_via_panel",
       "property_value_modification",
+      "property_color_change",
+      "property_font_size_change",
       "share_dialog_open_close",
       "main_menu_open",
       "design_prototype_tab_switch",
-      "data_testid_extraction"
+      "data_testid_extraction",
+      "plugin_api_createFrame",
+      "plugin_api_createText_with_font_loading",
+      "plugin_api_createRectangle",
+      "plugin_api_createEllipse",
+      "plugin_api_appendChild",
+      "plugin_api_fills_strokes_cornerRadius",
+      "plugin_api_viewport_scrollAndZoomIntoView",
+      "plugin_api_full_multi_screen_app_design",
+      "plugin_api_effects_drop_shadow_glow",
+      "plugin_api_effects_layer_blur_ambient_orbs",
+      "plugin_api_glassmorphic_card_pattern",
+      "plugin_api_prototype_flow_starting_points",
+      "plugin_api_prototype_reactions_smart_animate",
+      "plugin_api_single_scrollable_frame_website",
+      "plugin_api_node_remove_cleanup",
+      "plugin_api_viewport_center_and_zoom",
+      "plugin_api_extra_bold_font_weight",
+      "plugin_api_clipsContent_for_scrollable_frames",
+      "plugin_api_full_7200px_scrollable_website_8_sections",
+      "ffmpeg_video_frame_extraction_for_design_reference",
+      "figma_mcp_get_screenshot_for_node_capture",
+      "plugin_api_auto_layout_horizontal",
+      "plugin_api_auto_layout_vertical_nested",
+      "plugin_api_auto_layout_wrap",
+      "plugin_api_auto_layout_FILL_sizing",
+      "plugin_api_auto_layout_SPACE_BETWEEN",
+      "plugin_api_auto_layout_pricing_card",
+      "plugin_api_createImageAsync_from_url",
+      "plugin_api_image_fill_FILL_FIT_CROP_modes",
+      "plugin_api_image_fill_on_ellipse_avatars",
+      "plugin_api_dashed_strokes_strokeDashes",
+      "plugin_api_createNodeFromSvg_lucide_icons",
+      "plugin_api_svg_recolor_recursive",
+      "plugin_api_complex_svg_shapes",
+      "plugin_api_GRADIENT_RADIAL_glow_orb",
+      "plugin_api_GRADIENT_ANGULAR_conic_rainbow",
+      "plugin_api_GRADIENT_DIAMOND_jewel",
+      "plugin_api_multi_layer_stacked_fills",
+      "plugin_api_BACKGROUND_BLUR_glassmorphism",
+      "plugin_api_glass_card_light_dark_tinted",
+      "plugin_api_createComponent",
+      "plugin_api_combineAsVariants",
+      "plugin_api_ON_HOVER_CHANGE_TO_interaction",
+      "plugin_api_createInstance",
+      "plugin_api_blendMode_8_modes",
+      "plugin_api_boolean_union",
+      "plugin_api_boolean_subtract",
+      "plugin_api_boolean_intersect",
+      "plugin_api_boolean_exclude",
+      "plugin_api_badge_cutout_pattern",
+      "plugin_api_mask_star_polygon_squircle",
+      "plugin_api_mask_with_real_images",
+      "plugin_api_createVector_paths",
+      "plugin_api_setRangeFontSize_mixed",
+      "plugin_api_setRangeFills_colors",
+      "plugin_api_setRangeTextDecoration",
+      "plugin_api_setRangeTextCase",
+      "plugin_api_setRangeLetterSpacing",
+      "plugin_api_createPaintStyle",
+      "plugin_api_createTextStyle",
+      "plugin_api_fillStyleId_textStyleId",
+      "plugin_api_constraints_all_5_modes",
+      "plugin_api_polygon_pointCount",
+      "plugin_api_star_shape",
+      "plugin_api_exportAsync_PNG",
+      "plugin_api_exportAsync_JPG",
+      "plugin_api_exportAsync_SVG",
+      "plugin_api_exportAsync_PDF",
+      "plugin_api_setSharedPluginData",
+      "plugin_api_getSharedPluginData",
+      "plugin_api_getSharedPluginDataKeys",
+      "plugin_api_layoutGrids_COLUMNS",
+      "plugin_api_layoutGrids_ROWS",
+      "plugin_api_layoutGrids_GRID_pixel",
+      "plugin_api_layoutGrids_multi_stacked",
+      "plugin_api_overlay_navigation_modal",
+      "plugin_api_overlay_navigation_tooltip",
+      "plugin_api_trigger_ON_PRESS",
+      "plugin_api_trigger_AFTER_TIMEOUT",
+      "plugin_api_addComponentProperty_TEXT",
+      "plugin_api_addComponentProperty_BOOLEAN",
+      "plugin_api_componentPropertyReferences",
+      "plugin_api_setProperties_on_instance",
+      "plugin_api_createVariableCollection",
+      "plugin_api_createVariable_COLOR",
+      "plugin_api_createVariable_FLOAT",
+      "plugin_api_createVariable_STRING",
+      "plugin_api_createVariable_BOOLEAN",
+      "plugin_api_setBoundVariable",
+      "plugin_api_renameMode",
+      "plugin_api_createSection",
+      "plugin_api_createSlice_exportSettings",
+      "plugin_api_createPage_multi_page",
+      "plugin_api_createImage_from_bytes",
+      "plugin_api_fixed_header_constraints",
+      "plugin_api_toggle_interactive_component",
+      "plugin_api_tab_switch_3_variants",
+      "plugin_api_dropdown_overlay_menu",
+      "plugin_api_carousel_3_slides",
+      "plugin_api_instance_swap_property",
+      "plugin_install_via_actions_panel",
+      "plugin_save_from_community_search",
+      "plugin_run_from_actions_panel",
+      "plugin_context_menu_access",
+      "plugin_ui_iframe_sandbox_detection",
+      "plugin_anima_installed_and_launched",
+      "animation_parallax_smart_animate",
+      "animation_on_drag_trigger",
+      "animation_on_key_down_trigger",
+      "animation_gif_import_giphy",
+      "animation_horizontal_scroll",
+      "animation_2d_pan_both",
+      "animation_after_timeout_auto_advance",
+      "animation_mouse_enter_trigger",
+      "animation_mouse_leave_trigger",
+      "animation_mouse_up_trigger",
+      "animation_mouse_down_trigger",
+      "animation_on_media_end_trigger",
+      "animation_on_media_hit_trigger",
+      "animation_sticky_element",
+      "animation_change_to_variants",
+      "animation_scroll_to_anchor",
+      "animation_swap_navigation",
+      "animation_back_action",
+      "animation_url_action",
+      "animation_easing_11_types",
+      "animation_custom_spring_easing",
+      "animation_smart_animate_bouncy",
+      "plugin_vectary_saved_and_launched",
+      "plugin_lottiefiles_saved",
+      "plugin_jitter_saved",
+      "plugin_lottiefiles_launch_attempted",
+      "plugin_vectary_closed_via_display_none",
+      "animation_createVideoAsync_blocked_paid_plan"
     ],
     "battle_tested": true,
     "key_discoveries": [
@@ -392,7 +1057,129 @@
       "Layer rows use data-testid='{nodeId}-layers-panel-row' format for targeting specific layers",
       "Tool activation confirmed via aria-pressed='true', tool auto-deactivates to Move after shape creation",
       "Properties panel inputs respond to browser_fill_form + Enter keydown for value commits",
-      "Figma has 3 editor modes: Draw, Design, Dev Mode — switchable via segmented control in toolbelt"
+      "Figma has 3 editor modes: Draw, Design, Dev Mode — switchable via segmented control in toolbelt",
+      "CRITICAL: browser_human_click on new-design-file-button does NOT create files — use JS .click() instead",
+      "CRITICAL: browser_fill_form clear:true APPENDS on some inputs (Color, Font size) — use JS select()+execCommand('insertText') instead",
+      "CRITICAL: browser_human_click on canvas always clicks center — cannot place elements at different positions. Use Plugin API for multi-element designs",
+      "CRITICAL: Do NOT use session_start + navigate for Figma. Use browser_tabs + browser_navigate directly (no session needed)",
+      "Figma Plugin API (figma.*) is available in browser_js without plugin installation — createFrame, createText, createRectangle, createEllipse all work",
+      "Must call figma.loadFontAsync({family:'Inter', style:'Regular'}) before setting text.characters — supports Regular, Medium, Semi Bold, Bold",
+      "Plugin API approach built a complete 3-screen mobile app design (Dashboard, Tools, Sessions) with 94 elements in ~4 browser_js calls",
+      "Filename input always has aria-label='Figma Design' regardless of current file name",
+      "Width/height property inputs may lack aria-labels — find them by scanning inputs with value '100' in properties panel",
+      "figma.viewport.scrollAndZoomIntoView(figma.currentPage.children) zooms to show all frames",
+      "Text tool + canvas click + native type_text works BUT VS Code steals focus between tool calls, making it unreliable",
+      "Inter 'Extra Bold' font style is available — call figma.loadFontAsync({family:'Inter', style:'Extra Bold'}) for weight 800",
+      "Effects API: DROP_SHADOW with offset {x:0,y:0} + large radius (40-70px) + colored alpha = glow effect (Sintra AI style)",
+      "Effects API: LAYER_BLUR on low-opacity Ellipse nodes = ambient background glow orbs — creates depth and atmosphere",
+      "Glassmorphic card pattern: Frame fills opacity 0.03-0.05, white stroke opacity 0.06-0.1, colored DROP_SHADOW glow — Sintra AI DNA",
+      "Prototype API: frame.reactions = [{trigger:{type:'ON_CLICK'}, actions:[{type:'NODE', destinationId, navigation:'NAVIGATE', transition:{type:'SMART_ANIMATE',...}}]}]",
+      "Prototype API: page.flowStartingPoints = [{nodeId, name}] sets the starting frame for prototype mode",
+      "Single tall frame (1440x7200) with clipsContent=true scrolls in prototype mode like a real website — far better UX than separate frames",
+      "Alternating dark/white sections: insert full-width Rectangle fills at section Y offsets within the single frame",
+      "node.remove() deletes any node — useful for cleaning up and rebuilding designs from scratch",
+      "figma.viewport.center = {x, y} and figma.viewport.zoom = 0.65 for precise viewport control",
+      "Design reference workflow: extract video frames via ffmpeg (fps=2), read as images to analyze design patterns before building",
+      "Official Figma MCP (mcp__figma__*) provides get_screenshot, get_design_context, generate_figma_design — but requires auth token that can expire",
+      "Figma MCP token expiry: 'MCP server figma requires re-authorization (token expired)' — need to re-authenticate via /mcp command",
+      "For complex multi-section websites: split Plugin API calls per section (~1 browser_js call per section) to avoid timeout/size limits",
+      "Sintra AI design DNA: Pure black #030308 bg, glassmorphic cards (white 3-4% opacity), colored glows (violet/blue/gold), Inter font family, character-driven hero, alternating dark/white sections",
+      "CRITICAL: layoutSizingHorizontal='FILL' MUST be set AFTER appending child to auto-layout parent — Figma throws error if set before",
+      "Auto Layout WRAP: frame.layoutWrap = 'WRAP' + counterAxisSpacing for tag clouds and chip grids",
+      "createImageAsync(url) works with Unsplash URLs — add ?w=400&h=300&fit=crop for optimized loading",
+      "Image fills work on ANY shape: Rectangle, Ellipse (circular avatars), Frame — set scaleMode to FILL/FIT/CROP",
+      "Dashed strokes: element.strokeDashes = [4, 4] — creates dashed border effect",
+      "createNodeFromSvg requires xmlns='http://www.w3.org/2000/svg' in the SVG string — omitting it fails silently",
+      "SVG recoloring: traverse children recursively, updating fills and strokes on each vector child",
+      "BACKGROUND_BLUR is REAL glassmorphism (CSS backdrop-filter:blur equivalent) — requires content BEHIND the element",
+      "Glass card recipe: fill at 10% opacity + BACKGROUND_BLUR radius 24-40 + white stroke at 20% + DROP_SHADOW + INNER_SHADOW top edge",
+      "Three glass variants: light (white fill 10%), dark (black fill 30%), tinted (brand color fill 15%)",
+      "combineAsVariants places the variant set on the PAGE (top-level node), not inside the current frame",
+      "Component variant naming: 'Property=Value' format — Figma auto-parses into variant properties",
+      "ON_HOVER + CHANGE_TO + SMART_ANIMATE = interactive hover states in prototype mode (tested, works)",
+      "createInstance() creates a linked copy — changes to main component propagate to all instances",
+      "Blend modes on nodes: all 19 modes work. SCREEN for glows, MULTIPLY for tinting, OVERLAY for contrast",
+      "Boolean operations (union/subtract/intersect/exclude): shapes must be siblings in same parent. Result is BooleanOperationNode",
+      "Badge cutout pattern: subtract(circle, rect) creates notification badge notch — common UI pattern",
+      "Mask pattern: shape.isMask = true, then add content as NEXT sibling in same parent — order matters",
+      "createPolygon().pointCount = 6 for hexagon, createStar() for star shape — both work as masks",
+      "Vector paths: Figma path format is STRICT — use spaces between coordinates, NOT commas. 'M 50 0 L 20 55' not 'M 50,0 L 20,55'",
+      "Vector path fallback: if vectorPaths parsing fails, wrap path in <svg> string and use createNodeFromSvg instead",
+      "Text range methods: setRangeFontSize, setRangeFontName, setRangeFills, setRangeTextDecoration, setRangeTextCase, setRangeLetterSpacing — all take (startIndex, endIndex)",
+      "Design tokens: createPaintStyle + fillStyleId, createTextStyle + textStyleId — styles appear in Figma's style panel",
+      "Constraints: MIN/CENTER/MAX/STRETCH/SCALE — only for children of non-auto-layout frames",
+      "Total Plugin API capabilities tested: 15 out of 16 categories (Export skipped). All work via browser_js without plugin installation",
+      "exportAsync({format:'PNG'|'JPG'|'SVG'|'PDF'}) returns Uint8Array — all 4 formats work, use constraint:{type:'SCALE',value:2} for 2x resolution",
+      "setPluginData('key','value') requires plugin ID — use setSharedPluginData(namespace, key, value) instead for browser_js context",
+      "SharedPluginData namespace MUST be alphanumeric, _ or . only — hyphens cause 'namespace can only consist of alphanumeric characters' error",
+      "Layout grids: frame.layoutGrids = [{pattern:'COLUMNS', count:12, gutterSize:20, offset:40}] — GOTCHA: sectionSize only for GRID, not COLUMNS/ROWS",
+      "Multiple layout grids can be stacked on one frame — combine COLUMNS + ROWS + GRID for full grid system",
+      "Overlay interactions: navigation:'OVERLAY' with transition:{type:'DISSOLVE'} works for modals and tooltips",
+      "Reactions API schema: actions use 'resetVideoPosition' NOT 'preserveScrollPosition'. Transition types: DISSOLVE, SMART_ANIMATE only (SCROLL_ANIMATE, MOVE_IN, SLIDE_IN, SLIDE_OUT, PUSH all fail)",
+      "CORRECTED: Trigger types that WORK via API: ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, ON_MEDIA_END, AFTER_TIMEOUT, MOUSE_ENTER(delay:0), MOUSE_LEAVE(delay:0), MOUSE_UP(delay:0), MOUSE_DOWN(delay:0), ON_KEY_DOWN(device+keyCodes), ON_MEDIA_HIT(mediaHitTime). Total: 12 trigger types, 11 confirmed working",
+      "Component properties: addComponentProperty(name, 'TEXT'|'BOOLEAN', defaultValue) — INSTANCE_SWAP type also available but not tested",
+      "CRITICAL: componentPropertyReferences keys must use full key with #id suffix from componentPropertyDefinitions — e.g. 'title#21:0' not just 'title'",
+      "setProperties on instances: instance.setProperties({[fullKey]: value}) — works for TEXT and BOOLEAN property types",
+      "Variables: figma.variables.createVariableCollection('Name') creates collection. createVariable('name', collection, 'COLOR'|'FLOAT'|'STRING'|'BOOLEAN')",
+      "Variable binding: node.setBoundVariable('fills', 0, colorVariable) binds fill[0] to a COLOR variable",
+      "Variable modes: collection.renameMode(modeId, 'Light') works. collection.addMode('Dark') FAILS on free plan ('Limited to 1 modes only')",
+      "Total Plugin API capabilities tested: 22 categories across 20 test sections. All work via browser_js without plugin installation",
+      "createSection: works, has fills, can contain frames. Good for organizing related frames on canvas",
+      "createSlice: works with exportSettings [{format:'PNG', suffix:'@2x', constraint:{type:'SCALE',value:2}}, {format:'SVG'}] for multi-format export regions",
+      "createPage: works. figma.root.children gives all pages. New page is immediately available for appendChild",
+      "createImage(bytes): works with Uint8Array from exportAsync round-trip. Returns {hash} for image fills",
+      "createTextPath: FAILS — returns undefined, 'Expected node, got undefined' error. Not usable via browser_js",
+      "createVideoAsync API exists (typeof === 'function') but requires video Uint8Array data to test",
+      "Fixed-position header pattern: header with constraints STRETCH+MIN inside clipsContent+overflowDirection frame. Header stays fixed while content scrolls",
+      "Interactive toggle: Two component variants (State=Off, State=On) with ON_CLICK + CHANGE_TO both directions + SMART_ANIMATE. Knob slides, color changes",
+      "Tab switch: 3 component variants with tab bar buttons. Each non-active tab button has ON_CLICK + CHANGE_TO to target variant. Active indicator moves via SMART_ANIMATE",
+      "Dropdown menu: Button component with ON_CLICK + OVERLAY navigation to separate menu frame. DISSOLVE transition. Menu has 4 items with hover-ready rows",
+      "Carousel: 3 slide variants with Prev/Next buttons and dot indicators. CHANGE_TO + SMART_ANIMATE. Dots update per slide. Last slide has 'Start' CTA",
+      "INSTANCE_SWAP property: addComponentProperty('icon', 'INSTANCE_SWAP', defaultComponentId). Link via componentPropertyReferences = {mainComponent: key}. setProperties swaps icon on instances",
+      "Total Plugin API capabilities tested: 31 tests across all categories. Only createTextPath fails. Everything else works via browser_js",
+      "Comment workflow: activate comment tool via 'C' key (not browser_click — key works, click doesn't stick). Click canvas to place, type in contenteditable input, click Submit button. Comment appears with #number, author, timestamp",
+      "Comment resolution: 'Mark as resolved' button appears on posted comments. Click to resolve — comment disappears from active view",
+      "Version history: Main menu > File > Show version history. Shows autosave versions with timestamps. Named save dialog has #savepoint-modal-title input + #savepoint-modal-description textarea. Named saves may require Professional plan",
+      "Libraries modal: Main menu > Libraries. Shows 'This file', 'Updates', 'Browse libraries', 'Teams', 'UI kits' tabs. Community libraries addable (iOS, Material 3, Simple DS found). Publishing requires Professional plan",
+      "Multi-screen prototype: 4 screens (Login/Dashboard/Settings/Modal) with 6 interactions. NAVIGATE for screen-to-screen, OVERLAY for modal, BACK action for dismiss. flowStartingPoints for entry point",
+      "BACK action in reactions: {type:'BACK'} — dismisses overlays or navigates back. No destinationId needed",
+      "PLUGIN INSTALL BREAKTHROUGH: Plugins menu via right-click only shows 'Manage plugins…' when NO plugins are saved. Must FIRST save a plugin via Actions panel (bottom toolbar '/' button) > 'Plugins & widgets' tab > search > click result > 'Save' button",
+      "Actions panel (button[aria-label='Actions']) is in the BOTTOM TOOLBAR in Figma UI3 (2025+) — replaces old 'Resources' header button. Two may exist in DOM, use visible one",
+      "Plugin search in Actions panel: type name in .search--searchInput--k55la, click 'Search plugins & widgets for X' to search Community, click result to see detail with Save/Run buttons",
+      "Plugin Save vs Run: 'Save ⌘⏎' permanently installs to account (appears in right-click > Plugins > Saved). 'Run ⏎' executes immediately and closes Actions panel",
+      "Plugin UI runs in sandboxed iframe (src='https://www.figma.com/plugin-sandbox') — parent JS CANNOT access content. Container class: .jsvm_ui--pluginUI--YQm-H. Visible iframe ~348×670px",
+      "Community page 'Open in' button: shows 'Recent files' dropdown with .plugin_try_switch_editor_dropdown class. Clicking a file opens it in new tab but does NOT auto-run the plugin",
+      "Re-run last plugin: Cmd+Option+P (Mac) / Ctrl+Alt+P (Windows) — keyboard shortcut works when canvas has focus",
+      "PARALLAX: Smart Animate interpolates matched layer names independently — bg moves 20px while fg moves 200px = depth illusion. Duration 0.6-1.0s. Bidirectional ON_CLICK for toggle demo",
+      "GIF IMPORT: createImageAsync works with Giphy/animated GIF URLs. Returns imageHash, applied as IMAGE fill with scaleMode FIT/FILL. GIF animates in prototype mode",
+      "HORIZONTAL SCROLL: overflowDirection='HORIZONTAL' with clipsContent=true. Auto-layout row of cards inside creates swipeable carousel in prototype",
+      "2D PAN: overflowDirection='BOTH' creates map-like panning. 800x800 content in 390x300 viewport scrolls both directions",
+      "STICKY ELEMENT: layoutPositioning='ABSOLUTE' makes child fixed during scroll. REQUIRES parent to have layoutMode set (VERTICAL/HORIZONTAL). Then set constraints for positioning",
+      "ON_KEY_DOWN: type is 'ON_KEY_DOWN' NOT 'KEY_DOWN'. Requires device:'KEYBOARD' AND keyCodes:[number]. keyCode 32=space, 13=enter, 27=escape",
+      "MOUSE_ENTER/LEAVE/UP/DOWN: ALL WORK via API. Previous session reported them as broken — the fix is adding delay:0 property. {type:'MOUSE_ENTER', delay:0}",
+      "ON_MEDIA_END: fires when video in frame finishes playing. No extra properties needed. {type:'ON_MEDIA_END'}",
+      "ON_MEDIA_HIT: fires at specific video timestamp. {type:'ON_MEDIA_HIT', mediaHitTime:5} — mediaHitTime in seconds",
+      "12 EASINGS WORK: EASE_IN, EASE_OUT, EASE_IN_AND_OUT, LINEAR, EASE_IN_BACK, EASE_OUT_BACK, EASE_IN_AND_OUT_BACK, GENTLE, QUICK, BOUNCY, SLOW, CUSTOM_SPRING. Only DISSOLVE and SMART_ANIMATE transitions work",
+      "SWAP navigation: replaces current frame with target in prototype flow. Different from NAVIGATE (which pushes). Useful for tab-like switching without back stack",
+      "URL action: {type:'URL', url:'https://...'} opens external link from prototype. Works on any node with reactions",
+      "BACK action: {type:'BACK'} — navigates back in prototype history or dismisses overlay. No destinationId needed",
+      "SCROLL_TO: works with transition:null only (instant scroll). Destination must be a child inside a scrollable frame. Good for anchor links",
+      "MULTIPLE ACTIONS: blocked on free plan — 'You cannot create multiple actions on Reactions with your current plan'. Paid plan enables parallel actions from one trigger",
+      "SET_VARIABLE: blocked on free plan. Paid plan enables variable manipulation from prototype interactions",
+      "PLUGINS SAVED: Anima (figma-to-code), Vectary 3D Studio Lite (3D models, 779k users), LottieFiles (Lottie animations, 953k users), Jitter (animation+export, motion design). All found via Actions panel search",
+      "VECTARY CONFIRMED: Plugin launched successfully via Actions > search > click result. Plugin modal with title 'Vectary | 3D Studio Lite' visible. 850x540 iframe",
+      "createVideoAsync: API works (parses bytes, attempts upload) but BLOCKED — requires paid Pro team + file NOT in Drafts. Error: 'Uploading videos only works for files in a paid Pro team that are not in your Drafts'",
+      "PLUGIN LAUNCH via UI: Actions panel opens via Cmd+/ or button click. Search populates correctly. But running saved plugins hits reliability issues — Figma's menu hover for submenu expansion requires real mouse movement (not JS events), and Actions panel sometimes shows empty results despite correct search text. Vectary was only plugin successfully launched via Actions panel click. LottieFiles/Jitter saved but not fully run-tested",
+      "MENU HOVER LIMITATION: Figma's main menu > Plugins requires real mouse hover to expand submenu. JS mouseover/mouseenter events DO NOT trigger submenu expansion. CDP click closes the menu. Native macOS menu_click doesn't work on Chrome web menus. Workaround: use Actions panel search or Cmd+Option+P to re-run last plugin"
+    ],
+    "remaining_tests": [
+      "Run LottieFiles plugin and test Lottie animation import/export workflow",
+      "Run Jitter plugin and test timeline animation creation",
+      "Test Vectary with actual 3D model insertion into frame",
+      "Verify GIF playback in prototype mode (GIF imported, not yet prototype-tested)",
+      "Test video fills with actual video content (blocked by paid plan requirement for createVideoAsync)",
+      "Test ON_MEDIA_END and ON_MEDIA_HIT triggers with actual video (need video frame first)",
+      "Test prototype flow end-to-end: click Present, verify transitions work in prototype viewer"
     ]
   }
 }
