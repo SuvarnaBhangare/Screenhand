@@ -155,6 +155,7 @@ const MEMORY_TOOLS = new Set([
   "playbook_record", "platform_learn", "platform_explore",
   "job_create_chain",
   "observer_start", "observer_stop", "observer_status",
+  "orchestrator_start", "orchestrator_stop", "orchestrator_submit", "orchestrator_status",
 ]);
 
 // Track the strategy we're currently following (for feedback loop)
@@ -3134,6 +3135,176 @@ originalTool("worker_status", "Get the current status of the worker daemon (read
 
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });
+
+// ═══════════════════════════════════════════════
+// ORCHESTRATOR — multi-agent task routing
+// ═══════════════════════════════════════════════
+
+const ORCHESTRATOR_DAEMON_SCRIPT = path.resolve(__dirname, "scripts", "orchestrator-daemon.ts");
+
+server.tool("orchestrator_start", "Start the multi-agent orchestrator daemon. Manages parallel worker slots: web tasks (CDP) run in parallel, native tasks (AX/keyboard) are serialized per-app. Survives restarts.", {
+  webSlots: z.number().optional().describe("Number of parallel web worker slots (default: 4)"),
+  nativeSlots: z.number().optional().describe("Number of native worker slots (default: 1)"),
+  pollMs: z.number().optional().describe("Poll interval in ms (default: 1000)"),
+}, async ({ webSlots, nativeSlots, pollMs }) => {
+  const existingPid = getOrchestratorPid();
+  if (existingPid !== null) {
+    return { content: [{ type: "text" as const, text: `Orchestrator already running (pid=${existingPid}). Use orchestrator_stop first.` }] };
+  }
+
+  const compiledPath = fs.existsSync(path.resolve(__dirname, "scripts", "orchestrator-daemon.js"))
+    ? path.resolve(__dirname, "scripts", "orchestrator-daemon.js")
+    : path.resolve(__dirname, "dist", "scripts", "orchestrator-daemon.js");
+
+  const daemonArgs: string[] = [];
+  let child;
+  let usedCompiled = false;
+
+  if (fs.existsSync(compiledPath)) {
+    daemonArgs.push(compiledPath);
+    if (webSlots) daemonArgs.push("--web-slots", String(webSlots));
+    if (nativeSlots) daemonArgs.push("--native-slots", String(nativeSlots));
+    if (pollMs) daemonArgs.push("--poll", String(pollMs));
+    child = spawn("node", daemonArgs, { detached: true, stdio: "ignore", cwd: __dirname });
+    usedCompiled = true;
+  } else {
+    daemonArgs.push("tsx", ORCHESTRATOR_DAEMON_SCRIPT);
+    if (webSlots) daemonArgs.push("--web-slots", String(webSlots));
+    if (nativeSlots) daemonArgs.push("--native-slots", String(nativeSlots));
+    if (pollMs) daemonArgs.push("--poll", String(pollMs));
+    child = spawn("npx", daemonArgs, { detached: true, stdio: "ignore", cwd: __dirname });
+  }
+  child.unref();
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  const verifyPid = getOrchestratorPid();
+  if (!verifyPid) {
+    return { content: [{ type: "text" as const, text: `Orchestrator failed to start (mode=${usedCompiled ? "compiled" : "tsx"}).\nCheck log: ${ORCH_LOG_FILE}` }] };
+  }
+
+  return { content: [{ type: "text" as const, text: `Orchestrator started (pid=${verifyPid}).\nWeb slots: ${webSlots ?? 4} (parallel CDP) | Native slots: ${nativeSlots ?? 1} (serialized per-app)\nPoll: ${pollMs ?? 1000}ms\nLog: ${ORCH_LOG_FILE}\n\nSubmit tasks with orchestrator_submit. Web tasks run in parallel, native tasks queue per-app.` }] };
+});
+
+server.tool("orchestrator_stop", "Stop the orchestrator daemon. Running tasks finish before exit.", {}, async () => {
+  const pid = getOrchestratorPid();
+  if (!pid) {
+    return { content: [{ type: "text" as const, text: "No orchestrator daemon running." }] };
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+    await new Promise((r) => setTimeout(r, 2000));
+    return { content: [{ type: "text" as const, text: `Orchestrator stopped (pid=${pid}).` }] };
+  } catch (err: any) {
+    return { content: [{ type: "text" as const, text: `Failed to stop: ${err.message}` }] };
+  }
+});
+
+server.tool("orchestrator_submit", "Submit a task to the orchestrator. Web tasks (CDP) run in parallel, native tasks queue per-app. Returns immediately — task is processed asynchronously.", {
+  task: z.string().describe("What to do"),
+  mode: z.enum(["web", "native", "mixed"]).optional().describe("Execution mode: web (parallel CDP), native (serialized AX/keyboard), mixed (default: auto-detect)"),
+  playbookId: z.string().optional().describe("Playbook to execute"),
+  bundleId: z.string().optional().describe("Target app bundle ID (required for native tasks)"),
+  windowId: z.number().optional().describe("Target window ID"),
+  vars: z.record(z.string(), z.string()).optional().describe("Variables for playbook substitution"),
+  priority: z.number().optional().describe("Priority: lower = higher (default: 10)"),
+}, async ({ task, mode, playbookId, bundleId, windowId, vars, priority }) => {
+  const state = readOrchState();
+  if (!state?.running) {
+    return { content: [{ type: "text" as const, text: "Orchestrator not running. Use orchestrator_start first." }] };
+  }
+
+  const newTask = createOrchestratorTask(task, {
+    mode: mode ?? detectMode(playbookId, bundleId),
+    ...(playbookId !== undefined ? { playbookId } : {}),
+    ...(bundleId !== undefined ? { bundleId } : {}),
+    ...(windowId !== undefined ? { windowId } : {}),
+    ...(vars ? { vars } : {}),
+    ...(priority !== undefined ? { priority } : {}),
+  });
+
+  state.tasks.push(newTask);
+  state.totalSubmitted++;
+  writeOrchState(state);
+
+  const slotInfo = newTask.mode === "web"
+    ? `→ will run on next free web slot (${state.webSlots} available)`
+    : `→ will run on native slot (serialized for ${bundleId ?? "unknown app"})`;
+
+  return { content: [{ type: "text" as const, text: `Task submitted: ${newTask.id}\nMode: ${newTask.mode} ${slotInfo}\nPriority: ${newTask.priority}\n\nThe orchestrator will pick it up on the next poll cycle.` }] };
+});
+
+server.tool("orchestrator_status", "Get orchestrator status — worker slots, task queue, active/completed tasks.", {}, async () => {
+  const state = readOrchState();
+  if (!state) {
+    return { content: [{ type: "text" as const, text: "Orchestrator not running. Use orchestrator_start first." }] };
+  }
+
+  const lines = [
+    `Running: ${state.running}${state.pid ? ` (pid=${state.pid})` : ""}`,
+    `Started: ${state.startedAt}`,
+    `Slots: ${state.webSlots} web (parallel) + ${state.nativeSlots} native (per-app serial)`,
+    "",
+    "Workers:",
+  ];
+
+  for (const w of state.workers) {
+    const status = w.busy ? `BUSY → ${w.currentTaskId}` : "idle";
+    lines.push(`  [${w.id}] ${w.type} — ${status} (done: ${w.tasksCompleted}, failed: ${w.tasksFailed})`);
+  }
+
+  const queued = state.tasks.filter(t => t.status === "queued");
+  const running = state.tasks.filter(t => t.status === "running" || t.status === "assigned");
+  const done = state.tasks.filter(t => t.status === "done");
+  const failed = state.tasks.filter(t => t.status === "failed");
+  const blocked = state.tasks.filter(t => t.status === "blocked");
+
+  lines.push("", `Tasks: ${state.totalSubmitted} submitted, ${state.totalCompleted} done, ${state.totalFailed} failed`);
+  lines.push(`Queue: ${queued.length} queued, ${running.length} running, ${blocked.length} blocked`);
+
+  if (running.length > 0) {
+    lines.push("", "Running:");
+    for (const t of running) {
+      lines.push(`  ${t.id}: "${t.task.slice(0, 60)}" [${t.mode}] → slot ${t.assignedWorker}`);
+    }
+  }
+
+  if (queued.length > 0) {
+    lines.push("", `Queued (next ${Math.min(queued.length, 5)}):`);
+    for (const t of queued.slice(0, 5)) {
+      lines.push(`  ${t.id}: "${t.task.slice(0, 60)}" [${t.mode}] priority=${t.priority}`);
+    }
+  }
+
+  if (done.length > 0) {
+    lines.push("", `Recent completed (last ${Math.min(done.length, 5)}):`);
+    for (const t of done.slice(-5)) {
+      lines.push(`  ${t.id}: "${t.task.slice(0, 60)}" → ${t.result?.slice(0, 80) ?? "ok"}`);
+    }
+  }
+
+  if (failed.length > 0) {
+    lines.push("", `Recent failed (last ${Math.min(failed.length, 3)}):`);
+    for (const t of failed.slice(-3)) {
+      lines.push(`  ${t.id}: "${t.task.slice(0, 60)}" → ${t.error?.slice(0, 80) ?? "unknown"}`);
+    }
+  }
+
+  if (Object.keys(state.nativeLocks).length > 0) {
+    lines.push("", "Native app locks:");
+    for (const [app, slot] of Object.entries(state.nativeLocks)) {
+      lines.push(`  ${app} → slot ${slot}`);
+    }
+  }
+
+  lines.push("", `Log: ${ORCH_LOG_FILE}`);
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+// Helper aliases to keep tool code concise
+import { readOrchestratorState as readOrchState, writeOrchestratorState as writeOrchState, getOrchestratorDaemonPid as getOrchestratorPid, createTask as createOrchestratorTask, detectTaskMode as detectMode } from "./src/orchestrator/state.js";
+import { ORCHESTRATOR_LOG_FILE as ORCH_LOG_FILE } from "./src/orchestrator/types.js";
 
 // ═══════════════════════════════════════════════
 // OBSERVER — background app-level visual monitor
