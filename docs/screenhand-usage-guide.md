@@ -11,8 +11,38 @@ ScreenHand (`sh`) is an MCP server that gives you **eyes and hands on the deskto
 You can:
 - Control Chrome tabs (navigate, click, type, extract data)
 - Control desktop apps (focus, click, type, screenshot, read UI trees)
-- Run multi-step automation jobs
-- Save/recall learnings across sessions via memory
+- Run multi-step automation jobs with playbook-driven execution
+- Persist learnings across sessions — tools auto-inject playbook knowledge
+
+---
+
+## The Golden Rule: Preflight → Playbook → Execute → Learn
+
+Every automation should follow this loop. **Don't skip steps 1-2.**
+
+```
+Step 1: PREFLIGHT — Is this automatable?
+  → playbook_preflight(url, task)
+  → Get go/yellow/red rating BEFORE investing time
+
+Step 2: CHECK PLAYBOOK — Has someone done this before?
+  → platform_guide(platform, section="all")
+  → If playbook has executable steps → use job_create(playbookId=...)
+  → If playbook has flows/selectors → use them as your guide
+  → If no playbook → proceed manually, tool will learn as you go
+
+Step 3: EXECUTE — Do the work
+  → Tools AUTO-INJECT playbook hints (errors, selectors, job suggestions)
+  → You'll see ⚠/💡/📋 hints in tool responses — READ AND FOLLOW THEM
+  → Don't ignore hints — they prevent known failures
+
+Step 4: LEARN — Knowledge auto-saves
+  → Working selectors and error patterns auto-collect in memory
+  → On session_release → learnings merge into playbook for next time
+  → Call export_playbook(platform, domain) to save a full playbook
+```
+
+**The system gets smarter every session.** What you discover today helps every future session on that platform.
 
 ---
 
@@ -47,6 +77,32 @@ These tools send OS-level events to the **frontmost app**. But Claude Code runs 
 ### Mistake #3: Not calling browser_tabs first
 
 Tab IDs change when the MCP server restarts. Always call `browser_tabs` at the start of any browser workflow to get fresh IDs.
+
+### Mistake #4: Ignoring playbook hints in tool responses
+
+After every tool call, check the response for hint lines starting with ⚠, 💡, or 📋. These are **auto-injected from playbook knowledge** — known errors, preferred selectors, and job suggestions. Ignoring them means you'll repeat known failures.
+
+```
+⚠ Known issue (devpost): reCAPTCHA cannot be automated → poll manually
+💡 Preferred selector (x-twitter): compose.tweet_box: [data-testid="tweetTextarea_0"]
+📋 Playbook "twitter" has 12 steps (85% success). Use job_create(playbookId="twitter")
+```
+
+**Rule:** If you see a 📋 hint suggesting a playbook with executable steps, **use job_create** instead of manually clicking through.
+
+### Mistake #5: Manually repeating what a playbook already knows
+
+Before automating any platform, check if a playbook exists:
+```
+platform_guide(platform="twitter")  → see errors, selectors, flows
+playbook_preflight(url="https://x.com", task="post tweet")  → feasibility check
+```
+
+If the playbook has steps → `job_create(task="...", playbookId="twitter")`. Don't re-do it manually.
+
+### Mistake #6: Not calling session_release when done
+
+Always call `session_release` when finished. This flushes learned selectors and error patterns back into the playbook so they're available next time.
 
 ---
 
@@ -86,6 +142,23 @@ These control Chrome via CDP (Chrome DevTools Protocol). They work **in the back
 | `launch` | Launch an application | Open apps by name or bundle ID |
 | `applescript` | Run AppleScript | macOS-specific automation |
 
+### Playbook & Intelligence Tools (use FIRST)
+
+| Tool | What it does | When to use |
+|------|-------------|-------------|
+| `playbook_preflight` | Quick feasibility check — scans for captchas, WebGL, shadow DOM, React quirks | **Before starting** any new platform automation |
+| `platform_guide` | Get playbook knowledge — selectors, flows, errors, detection | **Before starting** — check what's already known |
+| `export_playbook` | Save session learnings as a reusable playbook | **After finishing** a successful automation |
+
+### Job Tools (auto-execute playbooks)
+
+| Tool | What it does | When to use |
+|------|-------------|-------------|
+| `job_create` | Create a job, optionally with a playbookId for auto-execution | When a playbook with steps exists — **preferred over manual execution** |
+| `job_run` | Execute a pending job | After job_create |
+| `job_status` | Check job progress | Monitor running jobs |
+| `job_list` | List all jobs | See what's queued |
+
 ### Memory Tools (persist learnings)
 
 | Tool | What it does |
@@ -98,6 +171,30 @@ These control Chrome via CDP (Chrome DevTools Protocol). They work **in the back
 ---
 
 ## Core Workflow Pattern
+
+### Starting a New Platform (first time)
+
+```
+1. playbook_preflight(url, task)    → Check if it's automatable (go/yellow/red)
+2. platform_guide(platform)         → Load known selectors, flows, errors
+3. browser_tabs                     → Get tab IDs
+4. browser_navigate                 → Go to the page
+5. ... do the work using playbook selectors ...
+6. export_playbook(platform, domain) → Save what you learned
+7. session_release                   → Flush learnings into playbook
+```
+
+### Returning to a Known Platform (playbook exists)
+
+```
+1. job_create(task="...", playbookId="twitter")  → Auto-execute via playbook
+2. job_run(jobId)                                → Run it
+3. job_status(jobId)                             → Check result
+```
+
+If the playbook doesn't have executable steps (only flows/selectors), fall back to manual with playbook guidance.
+
+### Every Browser Automation (manual path)
 
 Every browser automation follows this pattern:
 
@@ -203,46 +300,87 @@ When Claude Code outputs text in VS Code terminal, VS Code becomes the frontmost
 
 ---
 
-## Playbooks
+## Playbooks & Auto-Learning System
 
-Playbooks are JSON files in `playbooks/` that document **battle-tested selectors, flows, and error patterns** for each platform. They save you from rediscovering what works.
+Playbooks are JSON files in `playbooks/` containing **battle-tested selectors, flows, error patterns, and executable steps**. They save you from rediscovering what works.
+
+### How Playbooks Work Now (Auto-Injection)
+
+**You don't need to manually read playbooks anymore.** The ContextTracker system automatically:
+
+1. **Detects domain** from `browser_navigate`/`browser_open` calls
+2. **Matches playbook** by domain (cached, ~0ms)
+3. **Injects hints** into every tool response:
+   - ⚠ Known errors + solutions for the current tool
+   - 💡 Preferred selectors from the playbook
+   - 📋 "Use job_create" suggestion when executable steps exist
+4. **Collects learnings** from every tool success/failure (in-memory)
+5. **Flushes to playbook** on `session_release` — selectors that worked 2+ times and new error patterns get auto-added
+
+**This means playbooks improve automatically with every session.**
 
 ### Available Playbooks
 
-| Platform | File | Key selectors |
-|----------|------|---------------|
-| Instagram | `playbooks/instagram.json` | `svg[aria-label='Like']`, `textarea[aria-label='Add a comment...']` |
-| X/Twitter | `playbooks/x-twitter.json` | `[data-testid='tweet']`, `[data-testid='like']`, `[data-testid='tweetButton']` |
-| LinkedIn | `playbooks/linkedin.json` | Various `data-testid` and aria-label selectors |
-| Threads | `playbooks/threads.json` | Content-based selectors |
-| Reddit | `playbooks/reddit.json` | `[data-testid]` selectors |
-| Discord | `playbooks/discord.json` | `[class*='message']` patterns |
-| Figma | `playbooks/figma.json` | `[data-testid='Rectangle-tool']`, canvas interactions via CDP |
-| Codex Desktop | `playbooks/codex-desktop.json` | ProseMirror + CDP via `--remote-debugging-port=9333` |
-| Dev.to | `playbooks/devto.json` | Standard form selectors |
-| YouTube | `playbooks/youtube.json` | `[data-testid]` selectors |
+| Platform | File | Type |
+|----------|------|------|
+| X/Twitter | `playbooks/x-twitter.json`, `playbooks/twitter.json`, `playbooks/x_v1.json` | Reference (selectors, flows, errors) |
+| Instagram | `playbooks/instagram.json` | Reference |
+| LinkedIn | `playbooks/linkedin.json` | Reference |
+| Threads | `playbooks/threads.json` | Reference |
+| Reddit | `playbooks/reddit.json` | Reference |
+| Discord | `playbooks/discord.json` | Reference |
+| Figma | `playbooks/figma.json` | Reference (131 successes, battle-tested) |
+| Codex Desktop | `playbooks/codex-desktop.json` | Reference |
+| Dev.to | `playbooks/devto.json` | Reference (flows + detection + errors) |
+| Devpost | `playbooks/devpost.json` | Reference (flows + errors + captcha notes) |
+| YouTube | `playbooks/youtube.json` | Reference |
+| DaVinci Resolve | `playbooks/davinci-resolve-*.json` | Executable steps |
+| n8n | `playbooks/n8n.json` | Reference |
+| Canva | `playbooks/canva-smoke-test.json` | Executable steps |
 
-### How to use a playbook
+**Type meanings:**
+- **Reference** = has selectors, flows, errors but no executable steps → AI uses as context
+- **Executable** = has `steps[]` array → can be auto-run via `job_create(playbookId=...)`
 
-1. **Read the playbook** before automating a platform:
-   ```
-   Read playbooks/instagram.json
-   ```
-2. **Use the selectors** from the playbook — don't guess
-3. **Check the errors section** — it lists what doesn't work and the proven fixes
-4. **Check the flows section** — step-by-step instructions for common actions
+### When to use platform_guide vs rely on auto-injection
+
+| Situation | What to do |
+|-----------|-----------|
+| Starting automation on a platform | Call `platform_guide(platform)` once to see full playbook |
+| Mid-execution | Just read the ⚠/💡/📋 hints in tool responses — they're auto-injected |
+| Hit an error | Check `platform_guide(platform, section="errors")` for known solutions |
+| Want to see all selectors | `platform_guide(platform, section="selectors")` |
 
 ### Playbook structure
 
 ```json
 {
-  "selectors": { ... },     // CSS selectors that work
-  "flows": { ... },         // Step-by-step action recipes
-  "errors": [ ... ],        // Known pitfalls + solutions
-  "policyNotes": { ... },   // Rate limits, safety rules
-  "tool_preferences": { ... } // Which sh tool to use for what
+  "steps": [ ... ],          // Executable automation steps (if available)
+  "selectors": { ... },      // CSS selectors grouped by UI area
+  "flows": { ... },          // Step-by-step action recipes with guards
+  "errors": [ ... ],         // Known pitfalls + solutions (auto-injected!)
+  "detection": { ... },      // JS expressions to check page state
+  "urls": { ... },           // Named URLs for the platform
+  "policyNotes": { ... },    // Rate limits, safety rules
+  "successCount": 0,         // Reliability tracking
+  "failCount": 0
 }
 ```
+
+### Creating/Improving Playbooks
+
+Playbooks improve in two ways:
+
+**Automatic (every session):**
+- Selectors that work 2+ times → auto-added to `selectors.auto_discovered`
+- Error patterns seen 2+ times → auto-added to `errors[]`
+- Triggers on `session_release` or every 50 tool calls
+
+**Manual (when you want to save a full playbook):**
+```
+export_playbook(platform="twitter", domain="x.com", description="Twitter automation")
+```
+This pulls URLs, selectors, errors, and strategies from memory and saves to `playbooks/twitter.json`.
 
 ---
 
@@ -337,23 +475,68 @@ Electron apps are special — they're web apps in a Chromium shell. You can use 
 ```
 Need to...                          → Use this tool
 ─────────────────────────────────────────────────────
-See what tabs are open              → browser_tabs
-Go to a URL                         → browser_navigate
-Click a button in Chrome            → browser_human_click
-Type in a form field                → browser_fill_form
-Run JS / extract data               → browser_js
-Wait for something to load          → browser_wait
-Click in a desktop app              → focus + click
-Type in a desktop app               → focus + type_text
-Press keyboard shortcut             → focus + key
-Take a screenshot                   → screenshot
-Read all text on screen             → ocr
-Find UI elements in native app      → ui_tree
-Open an app                         → launch
-Use app menu (File, Edit, etc.)     → menu_click
-Remember something for next time    → memory_save
-Recall past learnings               → memory_recall
+BEFORE STARTING (do these first!)
+  Check if a site is automatable    → playbook_preflight(url, task)
+  See what's known about a platform → platform_guide(platform)
+  Auto-run a known playbook         → job_create(task, playbookId) + job_run
+
+BROWSER AUTOMATION
+  See what tabs are open            → browser_tabs
+  Go to a URL                       → browser_navigate
+  Click a button in Chrome          → browser_human_click
+  Type in a form field              → browser_fill_form
+  Run JS / extract data             → browser_js
+  Wait for something to load        → browser_wait
+
+DESKTOP AUTOMATION
+  Click in a desktop app            → focus + click
+  Type in a desktop app             → focus + type_text
+  Press keyboard shortcut           → focus + key
+  Take a screenshot                 → screenshot
+  Read all text on screen           → ocr
+  Find UI elements in native app    → ui_tree
+  Open an app                       → launch
+  Use app menu (File, Edit, etc.)   → menu_click
+
+AFTER FINISHING (do these last!)
+  Save session as playbook          → export_playbook(platform, domain)
+  Release session + flush learnings → session_release(sessionId)
+  Remember something specific       → memory_save / memory_record_learning
+  Recall past learnings             → memory_recall
 ```
+
+---
+
+## How the Auto-Learning Loop Works
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  You call browser_navigate("https://x.com")                 │
+│    → ContextTracker detects domain: "x.com"                  │
+│    → Matches playbook: "x-twitter"                           │
+│    → Caches errors, selectors, flows (one-time, ~0ms)        │
+│                                                              │
+│  You call browser_human_click(selector: "button.tweet")      │
+│    → ContextTracker checks: any known errors for click + x.com? │
+│    → Injects: "⚠ el.click() fails on React — use human_click" │
+│    → Tool executes normally                                   │
+│    → Records outcome: {tool, selector, success, domain}       │
+│                                                              │
+│  ... 48 more tool calls, all collecting outcomes ...          │
+│                                                              │
+│  You call session_release(sessionId)                         │
+│    → Flush: selectors that worked 2+ times → playbook        │
+│    → Flush: errors seen 2+ times → playbook                  │
+│    → One atomic disk write to playbooks/x-twitter.json        │
+│                                                              │
+│  NEXT SESSION on x.com:                                      │
+│    → Playbook is richer — more selectors, more known errors   │
+│    → Hints are more accurate                                  │
+│    → If steps[] exist → job_create auto-executes it           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Cost of auto-learning:** Zero extra latency, zero LLM calls, zero disk I/O during execution. All in-memory map lookups and array pushes. Only one disk write on session end.
 
 ---
 
@@ -362,9 +545,10 @@ Recall past learnings               → memory_recall
 | What | Where |
 |------|-------|
 | Playbooks | `playbooks/*.json` |
+| Context tracker | `src/context-tracker.ts` |
 | MCP server code | `mcp-desktop.ts` |
 | Native bridge (macOS) | `native/macos-bridge/` |
 | Memory storage | `~/.screenhand/memory/` |
 | Job queue | `~/.screenhand/jobs/` |
-| Session state | `~/.screenhand/sessions/` |
+| Session locks | `~/.screenhand/locks/` |
 | This guide | `docs/screenhand-usage-guide.md` |
