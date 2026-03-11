@@ -152,6 +152,9 @@ These control Chrome via CDP (Chrome DevTools Protocol). They work **in the back
 | `platform_explore` | Autonomously discover and test all interactive UI elements | **First time** — map clickable elements, find working selectors |
 | `playbook_record` | Macro recorder — captures your MCP tool calls as playbook steps | Record an expert doing a task → instant executable playbook |
 | `export_playbook` | Save session learnings as a reusable playbook | **After finishing** a successful automation |
+| `observer_start` | Start background daemon watching an app window (frame diff + OCR) | Apps with poor AX support (DaVinci, Adobe) |
+| `observer_stop` | Stop the observer daemon | When done with visual monitoring |
+| `observer_status` | Show observer frames, OCR text, popup detection | Check what the observer sees |
 
 ### Job Tools (auto-execute playbooks)
 
@@ -828,6 +831,79 @@ Combine all three for fastest ramp-up on a new platform:
 
 ---
 
+## Observer Daemon — Continuous App Monitoring
+
+For apps with poor accessibility support (DaVinci Resolve, Adobe, Blender), the observer daemon provides continuous visual awareness without slowing down the engine.
+
+### Architecture
+
+```
+Observer Daemon (background process)        Engine (fast path)
+─────────────────────────────────          ─────────────────
+  cg.captureWindow (app-level)              Reads state.json
+  → MD5 frame diff (skip if same)           → Pre-step popup check
+  → OCR only when pixels change             → locateByOcr resolve
+  → Popup pattern matching                  → Zero overhead if no popup
+  → Write state.json (atomic)
+```
+
+The daemon runs independently. The engine's hot path just reads a JSON file — no screenshots, no OCR, no CPU cost.
+
+### Usage
+
+```
+# 1. Get the window ID
+windows → find your app's window ID
+
+# 2. Start observing
+observer_start(bundleId="com.blackmagic-design.DaVinciResolve", windowId=1234, intervalMs=2000)
+
+# 3. Check what the observer sees
+observer_status → shows OCR text, popup detection, frame stats
+
+# 4. Run your playbook — popups auto-dismissed, OCR locate available
+job_create(playbookId="davinci-color-grade")
+job_run(jobId)
+
+# 5. Stop when done
+observer_stop
+```
+
+### Popup Auto-Dismiss
+
+The observer matches OCR text against known popup patterns:
+- Save dialogs → clicks "Don't Save"
+- Permission prompts → clicks "Allow"
+- Cookie banners → clicks "Accept"
+- Update nags → clicks "Later"
+- Chrome control banner → presses Escape
+
+If the playbook engine has `popupCheck` enabled (automatic when observer starts), it reads the observer state before each step and dismisses any detected popup.
+
+### Visual Locate (locateByOcr)
+
+Playbook steps can find targets by OCR text instead of CSS selectors:
+
+```json
+{
+  "action": "press",
+  "locateByOcr": "Color Wheels",
+  "offsetX": 400, "offsetY": 300,
+  "description": "Click below Color Wheels label"
+}
+```
+
+The engine checks observer OCR for the text, then clicks at the offset coordinates. Works on any app regardless of accessibility support.
+
+### Frame Diff Efficiency
+
+The daemon hashes each captured frame (MD5). If the hash matches the previous frame, OCR is skipped entirely. This means:
+- Static screens (waiting for render) → near-zero CPU
+- Active screens (user interacting) → OCR only on actual changes
+- Typical ratio: 80-90% of frames are skipped
+
+---
+
 ## Desktop App Automation
 
 For native macOS/Windows apps (not browser):
@@ -878,6 +954,7 @@ BEFORE STARTING (do these first!)
   Learn a platform from its docs    → platform_learn(platform, rootUrl)
   Map all UI elements automatically → platform_explore(platform, source, url)
   Record actions as a playbook      → playbook_record(action="start/stop")
+  Watch an app window continuously  → observer_start(bundleId, windowId)
 
 BROWSER AUTOMATION
   See what tabs are open            → browser_tabs
