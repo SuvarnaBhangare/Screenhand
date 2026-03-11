@@ -30,6 +30,7 @@ import path from "node:path";
 import { writeFileAtomicSync } from "../util/atomic-write.js";
 import type { ActionEntry, Strategy, ErrorPattern, MemoryStats } from "./types.js";
 import { SEED_STRATEGIES } from "./seeds.js";
+import { seedErrorsFromPlaybooks } from "./playbook-seeds.js";
 
 const MAX_ACTION_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_STRATEGIES = 500;
@@ -61,7 +62,10 @@ export class MemoryStore {
   private static exitHandlerRegistered = false;
   private static activeInstance: MemoryStore | null = null;
 
+  private baseDir: string;
+
   constructor(baseDir: string) {
+    this.baseDir = baseDir;
     this.dir = path.join(baseDir, ".screenhand", "memory");
     this.lockPath = path.join(this.dir, ".lock");
   }
@@ -84,6 +88,20 @@ export class MemoryStore {
     this.enforceStrategyLimit();
     this.rebuildFingerprintIndex();
     this.errorsCache = this.readLinesSafe<ErrorPattern>("errors.jsonl");
+
+    // Seed errors from playbooks — merge curated platform knowledge into memory.
+    // Uses pb_err_ prefix IDs so we can identify and refresh them on each boot.
+    const playbooksDir = path.join(this.baseDir, "playbooks");
+    const pbErrors = seedErrorsFromPlaybooks(playbooksDir);
+    if (pbErrors.length > 0) {
+      // Remove stale playbook-seeded errors (they'll be re-added with fresh data)
+      this.errorsCache = this.errorsCache.filter(e => !e.id.startsWith("pb_err_"));
+      // Merge fresh playbook errors
+      for (const e of pbErrors) {
+        this.errorsCache.push(e);
+      }
+    }
+
     this.enforceErrorLimit();
 
     // Build action stats without caching all entries

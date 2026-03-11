@@ -32,6 +32,7 @@ import { MemoryStore } from "./store.js";
 import { SessionTracker } from "./session.js";
 import { RecallEngine } from "./recall.js";
 import type { ActionEntry, Strategy, ErrorPattern, MemoryStats } from "./types.js";
+import { seedLearningsFromPlaybooks } from "./playbook-seeds.js";
 
 // ── New types ────────────────────────────────────
 
@@ -147,6 +148,29 @@ export class MemoryService {
 
     // Load learnings
     this.learningsCache = this.readJsonlSafe<Learning>("learnings.jsonl");
+
+    // Seed learnings from playbooks — selectors, detection, policy notes.
+    // These have scope prefixes like "chrome/figma" so they merge cleanly
+    // with runtime-discovered learnings without duplicating.
+    const playbooksDir = path.join(this.baseDir, "playbooks");
+    const pbLearnings = seedLearningsFromPlaybooks(playbooksDir);
+    if (pbLearnings.length > 0) {
+      const existingKeys = new Set(
+        this.learningsCache.map(l => `${l.scope}::${l.pattern}::${l.method}`)
+      );
+      let added = 0;
+      for (const pl of pbLearnings) {
+        const key = `${pl.scope}::${pl.pattern}::${pl.method}`;
+        if (!existingKeys.has(key)) {
+          this.learningsCache.push({
+            id: `pb_lrn_${added}`,
+            ...pl,
+          });
+          existingKeys.add(key);
+          added++;
+        }
+      }
+    }
 
     // Load existing snapshot if present (to restore mission/policy across restarts)
     const snapPath = this.filePath("state.json");
