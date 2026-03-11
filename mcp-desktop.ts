@@ -59,6 +59,8 @@ import { buildDocUrls, crawlPage, compileLearnResult, saveLearnResult } from "./
 import { AccessibilityAdapter } from "./src/runtime/accessibility-adapter.js";
 import { AutomationRuntimeService } from "./src/runtime/service.js";
 import { TimelineLogger } from "./src/logging/timeline-logger.js";
+import { readObserverState, getObserverDaemonPid } from "./src/observer/state.js";
+import { OBSERVER_DIR, OBSERVER_PID_FILE, OBSERVER_LOG_FILE } from "./src/observer/types.js";
 import { spawn } from "node:child_process";
 import os from "node:os";
 
@@ -152,6 +154,7 @@ const MEMORY_TOOLS = new Set([
   "playbook_preflight", "platform_guide", "export_playbook",
   "playbook_record", "platform_learn", "platform_explore",
   "job_create_chain",
+  "observer_start", "observer_stop", "observer_status",
 ]);
 
 // Track the strategy we're currently following (for feedback loop)
@@ -2943,6 +2946,7 @@ const PLAYBOOKS_DIR = path.join(os.homedir(), ".screenhand", "playbooks");
 
 let activeJobRunner: JobRunner | null = null;
 let activePlaybookStore: PlaybookStore | null = null;
+let activePlaybookEngine: PlaybookEngine | null = null;
 
 
 function getJobRunner(): JobRunner {
@@ -2958,6 +2962,7 @@ function getJobRunner(): JobRunner {
     const logger = new TimelineLogger();
     const runtimeService = new AutomationRuntimeService(adapter, logger);
     const playbookEngine = new PlaybookEngine(runtimeService);
+    activePlaybookEngine = playbookEngine;
     // Wire CDP into playbook engine for browser_js / cdp_key_event steps
     playbookEngine.setCDPConnect(async (overridePort?: number) => {
       if (overridePort) {
@@ -3126,6 +3131,104 @@ originalTool("worker_status", "Get the current status of the worker daemon (read
   }
 
   lines.push("", `Log: ${WORKER_LOG_FILE}`);
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+// ═══════════════════════════════════════════════
+// OBSERVER — background app-level visual monitor
+// ═══════════════════════════════════════════════
+
+const OBSERVER_DAEMON_SCRIPT = path.resolve(__dirname, "scripts", "observer-daemon.ts");
+
+server.tool("observer_start", "Start the observer daemon to continuously watch an app window. Captures frames via CGWindowListCreateImage, runs OCR only when pixels change, detects popups. Zero overhead on engine — reads a JSON file.", {
+  bundleId: z.string().describe("Bundle ID of the app to watch (e.g. com.blackmagic-design.DaVinciResolve)"),
+  windowId: z.number().describe("Window ID to capture (get from the 'windows' tool)"),
+  intervalMs: z.number().optional().describe("Capture interval in ms (default: 2000). Lower = more responsive but more CPU"),
+}, async ({ bundleId, windowId, intervalMs }) => {
+  const existingPid = getObserverDaemonPid();
+  if (existingPid !== null) {
+    return { content: [{ type: "text" as const, text: `Observer daemon already running (pid=${existingPid}). Use observer_stop first.` }] };
+  }
+
+  const compiledPath = fs.existsSync(path.resolve(__dirname, "scripts", "observer-daemon.js"))
+    ? path.resolve(__dirname, "scripts", "observer-daemon.js")
+    : path.resolve(__dirname, "dist", "scripts", "observer-daemon.js");
+
+  const daemonArgs: string[] = [];
+  let child;
+  let usedCompiled = false;
+
+  if (fs.existsSync(compiledPath)) {
+    daemonArgs.push(compiledPath, "--bundleId", bundleId, "--windowId", String(windowId));
+    if (intervalMs) daemonArgs.push("--interval", String(intervalMs));
+    child = spawn("node", daemonArgs, { detached: true, stdio: "ignore", cwd: __dirname });
+    usedCompiled = true;
+  } else {
+    daemonArgs.push("tsx", OBSERVER_DAEMON_SCRIPT, "--bundleId", bundleId, "--windowId", String(windowId));
+    if (intervalMs) daemonArgs.push("--interval", String(intervalMs));
+    child = spawn("npx", daemonArgs, { detached: true, stdio: "ignore", cwd: __dirname });
+  }
+  child.unref();
+
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const verifyPid = getObserverDaemonPid();
+  if (!verifyPid) {
+    return { content: [{ type: "text" as const, text: `Observer daemon failed to start (mode=${usedCompiled ? "compiled" : "tsx"}).\nCheck log: ${OBSERVER_LOG_FILE}` }] };
+  }
+
+  // Enable popup checks in the playbook engine
+  if (activePlaybookEngine) activePlaybookEngine.setPopupCheck(true);
+
+  return { content: [{ type: "text" as const, text: `Observer daemon started (pid=${verifyPid}).\nWatching: ${bundleId} (window ${windowId})\nInterval: ${intervalMs ?? 2000}ms\nLog: ${OBSERVER_LOG_FILE}\n\nPopup auto-dismiss enabled in playbook engine.\nUse observer_status to check frames/popups.` }] };
+});
+
+server.tool("observer_stop", "Stop the observer daemon.", {}, async () => {
+  const pid = getObserverDaemonPid();
+  if (!pid) {
+    return { content: [{ type: "text" as const, text: "No observer daemon running." }] };
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+    await new Promise((r) => setTimeout(r, 1000));
+    if (activePlaybookEngine) activePlaybookEngine.setPopupCheck(false);
+    return { content: [{ type: "text" as const, text: `Observer daemon stopped (pid=${pid}).` }] };
+  } catch (err: any) {
+    return { content: [{ type: "text" as const, text: `Failed to stop: ${err.message}` }] };
+  }
+});
+
+server.tool("observer_status", "Get observer daemon status — frames captured, OCR text, popup detection.", {}, async () => {
+  const state = readObserverState();
+  if (!state) {
+    return { content: [{ type: "text" as const, text: "Observer not running. Use observer_start to begin watching an app." }] };
+  }
+
+  const lines = [
+    `Running: ${state.running}${state.pid ? ` (pid=${state.pid})` : ""}`,
+    `Watching: ${state.bundleId} (window ${state.windowId})`,
+    `Interval: ${state.intervalMs}ms`,
+    `Frames: ${state.framesCaptured} captured, ${state.framesChanged} changed, ${state.ocrRuns} OCR runs`,
+  ];
+
+  if (state.lastFrame) {
+    lines.push(`Last frame: ${state.lastFrame.capturedAt} (changed: ${state.lastFrame.changed})`);
+    const ocrPreview = state.lastFrame.ocrText.substring(0, 500);
+    lines.push(`OCR text (first 500 chars):\n${ocrPreview}`);
+  }
+
+  if (state.popup) {
+    lines.push(`\nPOPUP DETECTED: "${state.popup.pattern}"`);
+    lines.push(`  Action: ${state.popup.dismissAction}`);
+    lines.push(`  Detected: ${state.popup.detectedAt}`);
+  }
+
+  if (state.lastError) {
+    lines.push(`\nLast error: ${state.lastError}`);
+  }
+
+  lines.push(`\nLog: ${OBSERVER_LOG_FILE}`);
 
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });

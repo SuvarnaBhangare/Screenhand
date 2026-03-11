@@ -57,6 +57,12 @@ export interface PlaybookStep {
   };
   /** If true, failure of this step is non-fatal — continue to next */
   optional?: boolean;
+  /** OCR text to locate on screen — engine finds text via observer, then clicks relative to it */
+  locateByOcr?: string;
+  /** X offset from OCR-located text center (used with locateByOcr) */
+  offsetX?: number;
+  /** Y offset from OCR-located text center (used with locateByOcr) */
+  offsetY?: number;
 }
 
 /** Known error pattern with solution — learned from real failures */

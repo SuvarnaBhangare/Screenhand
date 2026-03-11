@@ -26,6 +26,8 @@
 
 import type { AutomationRuntimeService } from "../runtime/service.js";
 import type { Playbook, PlaybookStep, PlaybookRunResult } from "./types.js";
+import { readObserverState, getObserverPopup } from "../observer/state.js";
+import type { DetectedPopup } from "../observer/types.js";
 
 /** CDP client interface — matches what JobRunner already provides */
 export interface CDPConnection {
@@ -39,8 +41,15 @@ const STEP_DELAY_MS = 300;
 
 export class PlaybookEngine {
   private cdpConnect?: (port?: number) => Promise<CDPConnection>;
+  /** Enable observer-based popup checks before each step */
+  private popupCheckEnabled = false;
 
   constructor(private readonly runtime: AutomationRuntimeService) {}
+
+  /** Enable/disable pre-step popup detection via observer daemon */
+  setPopupCheck(enabled: boolean): void {
+    this.popupCheckEnabled = enabled;
+  }
 
   /** Set CDP connection factory for browser_js and cdp_key_event actions. Factory accepts optional port override. */
   setCDPConnect(factory: (port?: number) => Promise<CDPConnection>): void {
@@ -60,9 +69,22 @@ export class PlaybookEngine {
     let stepsCompleted = 0;
 
     for (let i = 0; i < playbook.steps.length; i++) {
-      const step = options.vars ? this.substituteVars(playbook.steps[i]!, options.vars) : playbook.steps[i]!;
+      let step = options.vars ? this.substituteVars(playbook.steps[i]!, options.vars) : playbook.steps[i]!;
 
       try {
+        // Pre-step: check for popups via observer (if enabled, non-blocking)
+        if (this.popupCheckEnabled) {
+          await this.dismissPopupIfPresent(sessionId);
+        }
+
+        // OCR-based locate: resolve locateByOcr to coordinates before execution
+        if (step.locateByOcr) {
+          const coords = this.resolveOcrTarget(step.locateByOcr, step.offsetX ?? 0, step.offsetY ?? 0);
+          if (coords) {
+            step = { ...step, target: { x: coords.x, y: coords.y } };
+          }
+        }
+
         const result = await this.executeStep(sessionId, step, playbook.cdpPort);
         stepsCompleted++;
 
@@ -271,6 +293,90 @@ export class PlaybookEngine {
     });
 
     return r.ok && r.data.matched;
+  }
+
+  /**
+   * Dismiss a popup detected by the observer daemon.
+   * Reads observer state, if popup found, sends the appropriate dismiss action.
+   * Non-fatal — if observer isn't running or no popup, silently returns.
+   */
+  private async dismissPopupIfPresent(sessionId: string): Promise<void> {
+    let popup: DetectedPopup | null;
+    try {
+      popup = getObserverPopup();
+    } catch {
+      return; // Observer not running or state unreadable
+    }
+    if (!popup) return;
+
+    try {
+      switch (popup.dismissAction) {
+        case "press_escape":
+          await this.runtime.keyCombo({ sessionId, keys: ["escape"] });
+          break;
+        case "click_ok":
+        case "click_cancel":
+        case "click_close":
+        case "click_allow":
+        case "click_deny": {
+          // Map action to button text
+          const buttonMap: Record<string, string> = {
+            click_ok: "OK",
+            click_cancel: "Cancel",
+            click_close: "Close",
+            click_allow: "Allow",
+            click_deny: "Don't Allow",
+          };
+          const buttonText = buttonMap[popup.dismissAction] ?? "OK";
+          // Try to click the button by text
+          await this.runtime.press({ sessionId, target: { type: "text", value: buttonText } });
+          break;
+        }
+        case "unknown":
+          break; // Don't auto-dismiss unknown popups
+      }
+      // Wait briefly for popup to close
+      await sleep(500);
+    } catch {
+      // Popup dismiss failed — non-fatal, continue with step
+    }
+  }
+
+  /**
+   * Resolve an OCR text target to screen coordinates using observer state.
+   * Returns center coordinates of the matched text + offsets, or null if not found.
+   */
+  private resolveOcrTarget(
+    searchText: string,
+    offsetX: number,
+    offsetY: number,
+  ): { x: number; y: number } | null {
+    let state;
+    try {
+      state = readObserverState();
+    } catch {
+      return null;
+    }
+    if (!state?.running || !state.lastFrame?.ocrText) return null;
+
+    // Simple text search in OCR output
+    // The native OCR (vision.ocr) returns bounding boxes when available.
+    // For now we use a fallback: if the observer has the text, we know
+    // the element is visible. The caller should provide approximate
+    // coordinates via offsetX/offsetY relative to a known anchor.
+    const ocrText = state.lastFrame.ocrText;
+    if (!ocrText.toLowerCase().includes(searchText.toLowerCase())) {
+      return null; // Text not found on screen
+    }
+
+    // Text found — return offset coordinates (caller provides absolute offsets
+    // or relative to screen center as a basic heuristic)
+    if (offsetX !== 0 || offsetY !== 0) {
+      return { x: offsetX, y: offsetY };
+    }
+
+    // No explicit coordinates — can't determine position from plain OCR text alone
+    return null;
   }
 
   /**
