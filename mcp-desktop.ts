@@ -52,6 +52,7 @@ import type { JobState } from "./src/jobs/types.js";
 import { JOB_STATES } from "./src/jobs/types.js";
 import { PlaybookEngine } from "./src/playbook/engine.js";
 import { PlaybookStore } from "./src/playbook/store.js";
+import { ContextTracker } from "./src/context-tracker.js";
 import { AccessibilityAdapter } from "./src/runtime/accessibility-adapter.js";
 import { AutomationRuntimeService } from "./src/runtime/service.js";
 import { TimelineLogger } from "./src/logging/timeline-logger.js";
@@ -123,6 +124,11 @@ jobManager.init();
 const LOCK_DIR = path.join(os.homedir(), ".screenhand", "locks");
 const leaseManager = new LeaseManager(LOCK_DIR);
 
+// ── Context tracker — connects tool execution to playbook knowledge ──
+const _playbookStoreForContext = new PlaybookStore(path.resolve(__dirname, "playbooks"));
+_playbookStoreForContext.load();
+const contextTracker = new ContextTracker(_playbookStoreForContext);
+
 // Skip logging for memory tools themselves
 const MEMORY_TOOLS = new Set([
   "memory_snapshot", "memory_recall", "memory_save", "memory_record_error",
@@ -136,6 +142,7 @@ const MEMORY_TOOLS = new Set([
   "job_step_done", "job_step_fail", "job_resume", "job_dequeue", "job_remove",
   "job_run", "job_run_all",
   "worker_start", "worker_stop", "worker_status",
+  "playbook_preflight", "platform_guide", "export_playbook",
 ]);
 
 // Track the strategy we're currently following (for feedback loop)
@@ -174,6 +181,10 @@ function extractText(result: any): string {
     // ── PRE-CALL: check for known error warnings (~0ms, in-memory) ──
     const knownError = memory.quickErrorCheck(toolName);
 
+    // ── PRE-CALL: update context tracker (fires playbook lookup only on domain change) ──
+    contextTracker.updateContext(toolName, safeParams);
+    const playbookHints = contextTracker.getHints(toolName, safeParams);
+
     try {
       const result = await originalHandler(params, extra);
       const durationMs = Date.now() - start;
@@ -192,10 +203,18 @@ function extractText(result: any): string {
       };
       memory.recordEvent(entry);  // non-blocking write + session tracking
 
+      // ── POST-CALL: record success for playbook learning (in-memory only) ──
+      contextTracker.recordOutcome(toolName, safeParams, true, null);
+
       // ── POST-CALL: auto-recall hints (~0ms, in-memory) ──
       const hints: string[] = [];
 
-      // Warn about known errors for this tool
+      // Playbook-aware hints (errors, selectors, job suggestions)
+      for (const h of playbookHints) {
+        hints.push(h);
+      }
+
+      // Warn about known errors for this tool (from memory)
       if (knownError) {
         hints.push(`⚡ Memory: "${toolName}" has failed before: "${knownError.error}" (${knownError.occurrences}x). Fix: ${knownError.resolution}`);
       }
@@ -221,10 +240,16 @@ function extractText(result: any): string {
         activeStrategyFingerprint = null;
       }
 
-      // Attach hints as _meta (doesn't pollute tool output for MCP clients)
+      // Attach hints in BOTH content (visible) and _meta (for programmatic access)
       if (hints.length > 0) {
+        const hintText = hints.join("\n");
+        const resultContent = Array.isArray(result?.content) ? result.content : [];
         return {
           ...result,
+          content: [
+            ...resultContent,
+            { type: "text" as const, text: `\n---\n${hintText}` },
+          ],
           _meta: { ...(result?._meta ?? {}), memoryHints: hints },
         };
       }
@@ -247,6 +272,9 @@ function extractText(result: any): string {
         error: errorMsg,
       };
       memory.recordEvent(entry);  // non-blocking write + session tracking
+
+      // ── Record failure for playbook learning (in-memory only) ──
+      contextTracker.recordOutcome(toolName, safeParams, false, errorMsg);
 
       // Record strategy failure if we were following one
       if (activeStrategyFingerprint) {
@@ -1009,6 +1037,145 @@ server.tool("platform_guide", "Get automation guide for a platform (selectors, U
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
+server.tool("playbook_preflight", "Quick feasibility check before automating a platform. Scans the page for known blockers (captchas, WebGL, iframes), checks against playbook errors, tests selector availability. Returns go/yellow/red.", {
+  url: z.string().describe("URL to check, e.g. 'https://x.com'"),
+  task: z.string().optional().describe("What you want to automate, e.g. 'post a tweet'"),
+  tabId: z.string().optional().describe("Tab ID if page is already open"),
+}, async ({ url, task, tabId }) => {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const good: string[] = [];
+
+  // 1. Extract domain and find matching playbook
+  let domain: string;
+  try {
+    domain = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return { content: [{ type: "text", text: `❌ Invalid URL: ${url}` }] };
+  }
+
+  const playbook = _playbookStoreForContext.matchByDomain(domain);
+  if (playbook) {
+    good.push(`Found playbook: "${playbook.id}" (${playbook.successCount} successes, ${playbook.failCount} failures)`);
+
+    // Check known errors
+    if (playbook.errors && playbook.errors.length > 0) {
+      for (const err of playbook.errors) {
+        if (err.severity === "high") {
+          issues.push(`🔴 ${err.error} → ${err.solution}`);
+        } else {
+          warnings.push(`🟡 ${err.error} → ${err.solution}`);
+        }
+      }
+    }
+
+    // Check if playbook has executable steps
+    if (playbook.steps.length > 0) {
+      good.push(`Playbook has ${playbook.steps.length} executable steps — use job_create(playbookId="${playbook.id}") for auto-run`);
+    } else if (playbook.flows && Object.keys(playbook.flows).length > 0) {
+      warnings.push(`🟡 Playbook has flows but no executable steps — AI-guided execution available`);
+    }
+
+    // Check selector availability
+    if (playbook.selectors) {
+      const selectorCount = Object.values(playbook.selectors).reduce((sum, group) => sum + Object.keys(group).length, 0);
+      good.push(`${selectorCount} selectors documented`);
+    }
+  } else {
+    warnings.push(`🟡 No playbook exists for ${domain} — first-time automation, expect trial and error`);
+  }
+
+  // 2. Scan the page if we have CDP access
+  try {
+    const { CDP: cdp, port } = await ensureCDP();
+    let targetId = tabId;
+    if (!targetId) {
+      const targets = await cdp.List({ port });
+      const page = targets.find((t: any) => t.type === "page" && t.url?.includes(domain));
+      targetId = page?.id;
+    }
+
+    if (targetId) {
+      const client = await cdp({ port, target: targetId });
+
+      // Check for common blockers
+      const checks = await client.Runtime.evaluate({
+        expression: `(() => {
+          const results = {};
+          // Captcha detection
+          results.hasCaptcha = !!(
+            document.querySelector('[class*="captcha"]') ||
+            document.querySelector('[class*="recaptcha"]') ||
+            document.querySelector('[data-sitekey]') ||
+            document.querySelector('iframe[src*="captcha"]') ||
+            document.querySelector('iframe[src*="recaptcha"]')
+          );
+          // WebGL canvas (can't click via DOM)
+          results.hasWebGL = !!(document.querySelector('canvas[data-engine]') || document.querySelector('canvas.webgl'));
+          // Shadow DOM
+          const allEls = document.querySelectorAll('*');
+          let shadowCount = 0;
+          for (const el of allEls) { if (el.shadowRoot) shadowCount++; }
+          results.shadowDomCount = shadowCount;
+          // Iframes
+          results.iframeCount = document.querySelectorAll('iframe').length;
+          // React/SPA detection
+          results.isReact = !!(window.__REACT_DEVTOOLS_GLOBAL_HOOK__ || document.querySelector('[data-reactroot]'));
+          results.isNextJs = !!document.querySelector('#__next');
+          results.pageTitle = document.title;
+          results.url = location.href;
+          return results;
+        })()`,
+        returnByValue: true,
+      });
+
+      await client.close();
+
+      const r = checks.result.value;
+      if (r) {
+        good.push(`Page loaded: "${r.pageTitle}"`);
+        if (r.hasCaptcha) issues.push(`🔴 CAPTCHA detected — cannot be automated, needs manual solve`);
+        if (r.hasWebGL) warnings.push(`🟡 WebGL canvas detected — DOM clicks won't work, use Input.dispatchMouseEvent or coordinates`);
+        if (r.shadowDomCount > 0) warnings.push(`🟡 ${r.shadowDomCount} Shadow DOM elements — standard selectors may not reach them`);
+        if (r.iframeCount > 0) warnings.push(`🟡 ${r.iframeCount} iframes — may need to switch context`);
+        if (r.isReact) warnings.push(`🟡 React app — el.value assignment may not work, use browser_fill_form instead`);
+      }
+    } else {
+      warnings.push(`🟡 Page not open in Chrome — open ${url} first for deeper scan`);
+    }
+  } catch {
+    warnings.push(`🟡 Chrome CDP not available — can't scan page. Launch Chrome with --remote-debugging-port=9222`);
+  }
+
+  // 3. Check memory for past errors on this domain
+  const memErrors = memory.readErrors();
+  const domainErrors = memErrors.filter(e => {
+    const paramStr = JSON.stringify(e.params ?? {});
+    return paramStr.includes(domain);
+  });
+  if (domainErrors.length > 0) {
+    warnings.push(`🟡 ${domainErrors.length} past error(s) recorded for ${domain} in memory`);
+  }
+
+  // 4. Build verdict
+  const rating = issues.length > 0 ? "🔴 RED" : warnings.length > 2 ? "🟡 YELLOW" : "🟢 GREEN";
+
+  const lines = [
+    `# Preflight: ${domain}`,
+    `Rating: ${rating}`,
+    "",
+    ...good.map(g => `✅ ${g}`),
+    ...(issues.length > 0 ? ["", "## Blockers", ...issues] : []),
+    ...(warnings.length > 0 ? ["", "## Warnings", ...warnings] : []),
+    "",
+    issues.length > 0
+      ? "⛔ Some tasks may not be fully automatable. Review blockers above."
+      : "✅ Looks feasible. Proceed with automation.",
+  ];
+
+  return { content: [{ type: "text", text: lines.join("\n") }] };
+});
+
 server.tool("export_playbook", "Generate a playbook JSON from your session. Extracts URLs, selectors, errors+solutions from memory. Share the output with ScreenHand to help others automate this platform.", {
   platform: z.string().describe("Platform name, e.g. 'linkedin', 'twitter'"),
   domain: z.string().describe("Domain to filter actions by, e.g. 'linkedin.com'"),
@@ -1337,6 +1504,9 @@ originalTool("session_heartbeat", "Keep your session lease alive. Call every 60 
 originalTool("session_release", "Release your session lease so other clients can use the window.", {
   sessionId: z.string().describe("Session ID to release"),
 }, async ({ sessionId }) => {
+  // Flush playbook learnings before releasing session
+  contextTracker.flush();
+
   // Use filesystem-backed lease manager directly (shared with daemon)
   const released = leaseManager.release(sessionId);
   return { content: [{ type: "text" as const, text: released ? `Session ${sessionId} released.` : `Session ${sessionId} not found.` }] };
@@ -2950,6 +3120,11 @@ server.tool("codex_monitor_stop", "Stop the background monitor daemon.", {}, asy
 // ═══════════════════════════════════════════════
 
 async function main() {
+  // Flush playbook learnings on graceful shutdown
+  process.on("SIGINT", () => { contextTracker.flush(); process.exit(0); });
+  process.on("SIGTERM", () => { contextTracker.flush(); process.exit(0); });
+  process.on("beforeExit", () => { contextTracker.flush(); });
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

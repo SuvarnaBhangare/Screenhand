@@ -62,6 +62,44 @@ export class PlaybookStore {
     return this.playbooks.get(id);
   }
 
+  /** Find best playbook matching a domain (e.g., "x.com", "figma.com"). */
+  matchByDomain(domain: string): Playbook | null {
+    const domainLower = domain.toLowerCase();
+    let best: Playbook | null = null;
+    let bestScore = 0;
+
+    for (const p of this.playbooks.values()) {
+      let score = 0;
+
+      // Check platform name
+      if (p.platform.toLowerCase().includes(domainLower.split(".")[0]!)) score += 2;
+
+      // Check URL patterns
+      if (p.urlPatterns?.some((pat) => pat.toLowerCase().includes(domainLower))) score += 3;
+
+      // Check URLs map
+      if (p.urls) {
+        const hasUrl = Object.values(p.urls).some((u) => u.toLowerCase().includes(domainLower));
+        if (hasUrl) score += 3;
+      }
+
+      // Check tags
+      if (p.tags.some((t) => domainLower.includes(t.toLowerCase()))) score += 1;
+
+      // Weight by reliability
+      if (score > 0 && p.successCount + p.failCount > 0) {
+        score *= p.successCount / (p.successCount + p.failCount);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+
+    return bestScore > 0 ? best : null;
+  }
+
   /** Find playbooks matching a URL. */
   matchByUrl(url: string): Playbook[] {
     return this.getAll().filter((p) => {
