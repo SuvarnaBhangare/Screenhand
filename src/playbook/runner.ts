@@ -274,7 +274,7 @@ Current UI state:
 ${pageState}
 ${playbookContext ? `\n--- PLAYBOOK REFERENCE ---\n${playbookContext}\nUse the selectors, flows, and error solutions above to guide your actions. Prefer data-testid selectors over text matching.\n---\n` : ""}
 What's the next step? Respond with ONE step as JSON:
-{ "action": "press|type_into|navigate|key_combo|scroll|wait", "target": "...", "text": "...", "url": "...", "keys": [...], "ms": 1000, "description": "..." }
+{ "action": "press|type_into|navigate|key|key_combo|menu_click|scroll|wait", "target": "...", "text": "...", "url": "...", "keys": [...], "menuPath": ["File", "Save"], "ms": 1000, "description": "..." }
 
 Or if done: { "action": "done", "description": "Task complete" }`;
 

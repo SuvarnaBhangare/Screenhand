@@ -159,11 +159,19 @@ export class PlaybookEngine {
         return `Extracted: ${JSON.stringify(r.data).slice(0, 200)}`;
       }
 
+      case "key":
       case "key_combo": {
-        if (!step.keys || step.keys.length === 0) throw new Error("key_combo step missing keys");
+        if (!step.keys || step.keys.length === 0) throw new Error(`${step.action} step missing keys`);
         const r = await this.runtime.keyCombo({ sessionId, keys: step.keys });
         if (!r.ok) throw new Error(r.error.message);
-        return `Key combo: ${step.keys.join("+")}`;
+        return `${step.action === "key" ? "Key" : "Key combo"}: ${step.keys.join("+")}`;
+      }
+
+      case "menu_click": {
+        if (!step.menuPath || step.menuPath.length === 0) throw new Error("menu_click step missing menuPath");
+        const r = await this.runtime.menuClick({ sessionId, menuPath: step.menuPath });
+        if (!r.ok) throw new Error(r.error.message);
+        return `Menu click: ${step.menuPath.join(" > ")}`;
       }
 
       case "scroll": {
@@ -245,6 +253,7 @@ export class PlaybookEngine {
     if (result.url) result.url = sub(result.url);
     if (result.description) result.description = sub(result.description);
     if (result.verify) result.verify = sub(result.verify);
+    if (result.menuPath) result.menuPath = result.menuPath.map(sub);
     return result;
   }
 

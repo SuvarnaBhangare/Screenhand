@@ -21,15 +21,17 @@
 
 export interface PlaybookStep {
   /** Action to perform */
-  action: "navigate" | "press" | "type_into" | "extract" | "key_combo" | "scroll" | "wait" | "screenshot" | "browser_js" | "cdp_key_event";
+  action: "navigate" | "press" | "type_into" | "extract" | "key" | "key_combo" | "menu_click" | "scroll" | "wait" | "screenshot" | "browser_js" | "cdp_key_event";
   /** Target — CSS selector, text, or {x,y} */
   target?: string | { selector: string } | { x: number; y: number };
   /** Text to type (for type_into) */
   text?: string;
   /** URL to navigate to (for navigate) */
   url?: string;
-  /** Keys for key_combo */
+  /** Keys for key / key_combo */
   keys?: string[];
+  /** Menu bar path segments for menu_click */
+  menuPath?: string[];
   /** Wait ms */
   ms?: number;
   /** Scroll direction */

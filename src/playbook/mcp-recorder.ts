@@ -39,7 +39,8 @@ function mapToolToAction(toolName: string): PlaybookStep["action"] | null {
     case "click": case "click_text": case "browser_click":
     case "click_with_fallback": case "ui_press": return "press";
     case "type_text": case "browser_type": case "type_with_fallback": return "type_into";
-    case "key": return "key_combo";
+    case "key": return "key";
+    case "menu_click": return "menu_click";
     case "scroll": case "scroll_with_fallback": return "scroll";
     case "browser_js": return "browser_js";
     case "screenshot": case "screenshot_file": return "screenshot";
@@ -78,10 +79,20 @@ function buildStep(
       step.description = `Type "${step.text.substring(0, 50)}" into ${step.target}`;
       break;
 
+    case "key":
     case "key_combo": {
       const combo = String(params.combo ?? params.key ?? "");
       step.keys = combo.split("+").map(k => k.trim());
-      step.description = `Key combo: ${combo}`;
+      step.description = `${action === "key" ? "Key" : "Key combo"}: ${combo}`;
+      break;
+    }
+
+    case "menu_click": {
+      const menuPath = Array.isArray(params.menuPath)
+        ? params.menuPath.map((part) => String(part).trim()).filter(Boolean)
+        : String(params.menuPath ?? "").split("/").map((part) => part.trim()).filter(Boolean);
+      step.menuPath = menuPath;
+      step.description = `Menu click: ${menuPath.join(" > ")}`;
       break;
     }
 
@@ -150,7 +161,14 @@ export class McpPlaybookRecorder {
 
     // Deduplicate consecutive identical steps
     const last = this.steps[this.steps.length - 1];
-    if (last && last.action === step.action && last.target === step.target && last.code === step.code) {
+    if (
+      last &&
+      last.action === step.action &&
+      last.target === step.target &&
+      last.code === step.code &&
+      JSON.stringify(last.keys ?? []) === JSON.stringify(step.keys ?? []) &&
+      JSON.stringify(last.menuPath ?? []) === JSON.stringify(step.menuPath ?? [])
+    ) {
       return; // skip duplicate
     }
 

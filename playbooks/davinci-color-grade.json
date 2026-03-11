@@ -1,0 +1,153 @@
+{
+  "id": "davinci-color-grade",
+  "name": "DaVinci Resolve - Basic Color Grade",
+  "description": "Keyboard-first color-correction flow that switches to the Color page, adds correction nodes, applies Auto Color, enables printer-light hotkeys, adds a windowed node, and grabs a still. Designed for ScreenHand environments where DaVinci UI elements are not accessibility-visible.",
+  "platform": "davinci-resolve",
+  "version": "1.0.0",
+  "tags": [
+    "davinci-resolve",
+    "color",
+    "grading",
+    "keyboard",
+    "menu"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "manual_pdf": "https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_20.3_Reference_Manual.pdf",
+    "training": "https://www.blackmagicdesign.com/products/davinciresolve/training"
+  },
+  "selectors": {
+    "menus": {
+      "color_page": "Workspace/Switch to Page/Color",
+      "printer_light_hotkeys": "Color/Printer Light Hotkeys",
+      "add_circle_window_node": "Color/Nodes/Add Serial Node + CPW",
+      "add_outside_node": "Color/Nodes/Add Outside Node",
+      "grab_still": "Color/Stills/Grab Still"
+    }
+  },
+  "flows": {
+    "basic_color_correction": {
+      "why": "Provides a reproducible baseline grade without relying on inaccessible UI widgets.",
+      "steps": [
+        "Switch to Color, add a serial node, apply Auto Color, enable printer-light hotkeys, add a power-window node, then grab a still."
+      ]
+    }
+  },
+  "policyNotes": {
+    "preconditions": [
+      "Open a project and select the clip you want to grade before running this playbook.",
+      "If printer-light hotkeys are already enabled, the menu step is idempotent."
+    ],
+    "limitations": [
+      "Default Resolve shortcuts do not expose direct palette toggles for Curves or Qualifier, so this workflow focuses on node creation, primaries, windows, and still capture."
+    ]
+  },
+  "steps": [
+    {
+      "action": "key",
+      "keys": [
+        "shift",
+        "6"
+      ],
+      "description": "Switch to the Color page"
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Wait for the Color page to settle"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "alt",
+        "s"
+      ],
+      "description": "Add a serial correction node"
+    },
+    {
+      "action": "wait",
+      "ms": 400,
+      "description": "Let the node graph update"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "shift",
+        "alt",
+        "c"
+      ],
+      "description": "Apply Auto Color for a primary-balance starting point"
+    },
+    {
+      "action": "wait",
+      "ms": 600,
+      "description": "Wait for Auto Color to finish"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "Color",
+        "Printer Light Hotkeys"
+      ],
+      "description": "Enable printer-light hotkeys for keyboard primary trims"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "7"
+      ],
+      "description": "Nudge red printer light up one step"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "8"
+      ],
+      "description": "Nudge green printer light up one step"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "9"
+      ],
+      "description": "Nudge blue printer light up one step"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "Color",
+        "Nodes",
+        "Add Serial Node + CPW"
+      ],
+      "description": "Add a serial node with a circular power window"
+    },
+    {
+      "action": "wait",
+      "ms": 400,
+      "description": "Wait for the windowed node to appear"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "Color",
+        "Nodes",
+        "Add Outside Node"
+      ],
+      "description": "Create an outside node for the isolated correction"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "Color",
+        "Stills",
+        "Grab Still"
+      ],
+      "description": "Grab a still for before/after comparison"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the Color page after grading"
+    }
+  ]
+}

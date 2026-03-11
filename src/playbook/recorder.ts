@@ -392,11 +392,12 @@ ${events.map((e, i) => `${i + 1}. [${e.timestamp}] ${e.type}: ${JSON.stringify(e
 ${screenshots.length > 0 ? `\n${screenshots.length} screenshots were taken during recording. The first and last are attached below for visual context.\n` : ""}
 Convert these into a JSON array of playbook steps. Each step:
 {
-  "action": "navigate" | "press" | "type_into" | "key_combo" | "scroll" | "wait" | "screenshot",
+  "action": "navigate" | "press" | "type_into" | "key" | "key_combo" | "menu_click" | "scroll" | "wait" | "screenshot",
   "target": "CSS selector, text label, or {\"selector\": \"...\"}",
   "url": "for navigate",
   "text": "for type_into",
-  "keys": ["for", "key_combo"],
+  "keys": ["for", "key or key_combo"],
+  "menuPath": ["for", "menu_click"],
   "ms": 1000,
   "description": "human-readable description of what this step does",
   "verify": "optional CSS selector or text to verify success",

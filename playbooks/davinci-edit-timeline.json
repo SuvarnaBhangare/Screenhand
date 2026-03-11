@@ -1,0 +1,162 @@
+{
+  "id": "davinci-edit-timeline",
+  "name": "DaVinci Resolve - Import And Arrange Timeline",
+  "description": "Keyboard-only edit workflow that imports media, focuses the media pool and timeline, appends clips, adds a transition, and drops a marker. Intended for projects where the current file picker selection is already correct.",
+  "platform": "davinci-resolve",
+  "version": "1.0.0",
+  "tags": [
+    "davinci-resolve",
+    "edit",
+    "timeline",
+    "import",
+    "keyboard",
+    "menu"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "manual_pdf": "https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_20.3_Reference_Manual.pdf",
+    "training": "https://www.blackmagicdesign.com/products/davinciresolve/training"
+  },
+  "selectors": {
+    "menus": {
+      "edit_page": "Workspace/Switch to Page/Edit",
+      "import_media": "File/Import/Media…",
+      "add_transition": "Timeline/Add Transition"
+    }
+  },
+  "flows": {
+    "import_arrange_clips": {
+      "why": "Stages a simple timeline without pointer clicks by leaning on panel-focus shortcuts and edit commands.",
+      "steps": [
+        "Switch to Edit, import media, focus Media Clips, append the selected clip(s), then focus the timeline to add a transition and marker."
+      ]
+    }
+  },
+  "policyNotes": {
+    "preconditions": [
+      "Open a project before running the playbook.",
+      "The native import dialog must already be pointed at the desired folder and current selection, because the playbook uses keyboard confirmation only."
+    ],
+    "limitations": [
+      "This workflow assumes at least one imported clip can be reached with arrow-key selection from the Media Clips panel."
+    ]
+  },
+  "steps": [
+    {
+      "action": "key",
+      "keys": [
+        "shift",
+        "4"
+      ],
+      "description": "Switch to the Edit page"
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Wait for the Edit page to settle"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "File",
+        "Import",
+        "Media…"
+      ],
+      "description": "Open the native media import dialog"
+    },
+    {
+      "action": "wait",
+      "ms": 600,
+      "description": "Wait for the file picker to appear"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "enter"
+      ],
+      "description": "Confirm the current file picker selection"
+    },
+    {
+      "action": "wait",
+      "ms": 1200,
+      "description": "Wait for media import to complete"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "cmd",
+        "2"
+      ],
+      "description": "Focus the Media Clips panel"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "down"
+      ],
+      "description": "Select the next clip in Media Clips"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "shift",
+        "f12"
+      ],
+      "description": "Append the selected clip to the end of the timeline"
+    },
+    {
+      "action": "wait",
+      "ms": 400,
+      "description": "Wait for the append edit to complete"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "cmd",
+        "4"
+      ],
+      "description": "Focus the timeline"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "n"
+      ],
+      "description": "Toggle snapping on for predictable edits"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "b"
+      ],
+      "description": "Switch to Blade Edit mode"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "a"
+      ],
+      "description": "Return to Normal Edit mode"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "cmd",
+        "t"
+      ],
+      "description": "Add the default transition at the selected cut"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "m"
+      ],
+      "description": "Drop a marker on the current edit"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the Edit page after timeline assembly"
+    }
+  ]
+}

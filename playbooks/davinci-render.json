@@ -1,0 +1,114 @@
+{
+  "id": "davinci-render",
+  "name": "DaVinci Resolve - Render Export",
+  "description": "Keyboard-first export workflow that switches to Deliver, marks the range, then uses Quick Export as the stable no-pointer fallback when Deliver queue buttons are not accessibility-exposed.",
+  "platform": "davinci-resolve",
+  "version": "1.0.0",
+  "tags": [
+    "davinci-resolve",
+    "deliver",
+    "render",
+    "export",
+    "keyboard",
+    "menu"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "manual_pdf": "https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_20.3_Reference_Manual.pdf",
+    "training": "https://www.blackmagicdesign.com/products/davinciresolve/training"
+  },
+  "selectors": {
+    "menus": {
+      "deliver_page": "Workspace/Switch to Page/Deliver",
+      "quick_export": "File/Quick Export…"
+    }
+  },
+  "flows": {
+    "quick_export_fallback": {
+      "why": "Deliver queue buttons are not reliably exposed via accessibility, so Quick Export is the deterministic export path for keyboard-only automation.",
+      "steps": [
+        "Switch to Deliver, define the In/Out range, open Quick Export, and confirm the last-used preset and destination from the keyboard."
+      ]
+    }
+  },
+  "policyNotes": {
+    "preconditions": [
+      "Open the target project and timeline before running this playbook.",
+      "Quick Export should already remember the desired preset and destination, because the dialog is confirmed from the keyboard using the last-used state."
+    ],
+    "limitations": [
+      "The default Resolve UI does not expose Add to Render Queue and Start Render as stable menu targets, so this playbook uses Quick Export instead of the Deliver queue buttons."
+    ]
+  },
+  "steps": [
+    {
+      "action": "key",
+      "keys": [
+        "shift",
+        "8"
+      ],
+      "description": "Switch to the Deliver page"
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Wait for the Deliver page to settle"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "i"
+      ],
+      "description": "Mark the current frame as the render In point"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "o"
+      ],
+      "description": "Mark the current frame as the render Out point"
+    },
+    {
+      "action": "menu_click",
+      "menuPath": [
+        "File",
+        "Quick Export…"
+      ],
+      "description": "Open Quick Export as the stable render fallback"
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "description": "Wait for the Quick Export dialog to appear"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "enter"
+      ],
+      "description": "Accept the currently highlighted Quick Export preset"
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "description": "Wait for the export confirmation state"
+    },
+    {
+      "action": "key",
+      "keys": [
+        "enter"
+      ],
+      "description": "Confirm export using the last-used destination"
+    },
+    {
+      "action": "wait",
+      "ms": 2000,
+      "description": "Give Resolve time to start the export"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the Deliver or export dialog state after submission"
+    }
+  ]
+}
