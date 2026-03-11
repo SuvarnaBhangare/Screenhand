@@ -300,87 +300,225 @@ When Claude Code outputs text in VS Code terminal, VS Code becomes the frontmost
 
 ---
 
-## Playbooks & Auto-Learning System
+## Two Knowledge Systems: Memory vs Playbooks
 
-Playbooks are JSON files in `playbooks/` containing **battle-tested selectors, flows, error patterns, and executable steps**. They save you from rediscovering what works.
+ScreenHand has **two separate knowledge systems** that serve different purposes. Understanding when to use each is critical.
 
-### How Playbooks Work Now (Auto-Injection)
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│  MEMORY (reference knowledge)          PLAYBOOK (automation recipe) │
+│  ─────────────────────────             ───────────────────────────  │
+│  "What happened & what I learned"      "How to do this task"        │
+│                                                                     │
+│  Stores:                               Stores:                      │
+│  • Past action logs                    • Executable steps[]         │
+│  • Error patterns + fixes              • CSS selectors by area      │
+│  • Successful strategies               • Named flows with guards    │
+│  • Session-specific learnings          • Known errors + solutions   │
+│                                        • Detection expressions      │
+│  Lives in: ~/.screenhand/memory/       • Platform URLs              │
+│  Accessed via: memory_* tools                                       │
+│  Auto-injected: YES (error hints)      Lives in: playbooks/*.json   │
+│                                        Accessed via: platform_guide │
+│  Best for:                                       + auto-injection   │
+│  • "Has this tool failed before?"                                   │
+│  • "What strategy worked last time?"   Best for:                    │
+│  • Recording new discoveries           • "Run this task hands-free" │
+│  • Guiding manual execution            • "What selectors work here?"│
+│                                        • "What errors will I hit?"  │
+│                                        • Repeatable automation      │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-**You don't need to manually read playbooks anymore.** The ContextTracker system automatically:
+### Memory = Reference (guides you while you work manually)
 
-1. **Detects domain** from `browser_navigate`/`browser_open` calls
-2. **Matches playbook** by domain (cached, ~0ms)
-3. **Injects hints** into every tool response:
-   - ⚠ Known errors + solutions for the current tool
-   - 💡 Preferred selectors from the playbook
-   - 📋 "Use job_create" suggestion when executable steps exist
-4. **Collects learnings** from every tool success/failure (in-memory)
-5. **Flushes to playbook** on `session_release` — selectors that worked 2+ times and new error patterns get auto-added
+Memory is the **diary**. It records what happened, what worked, what failed. Use it when:
+- You're doing something **new** and want to check past experience
+- You want to **save a discovery** for future sessions
+- You hit an error and want to check if there's a **known fix**
 
-**This means playbooks improve automatically with every session.**
+Memory tools:
+```
+memory_recall(query="figma canvas click")     → "CDP Input.dispatchMouseEvent works, DOM clicks don't"
+memory_record_error(tool, error, resolution)  → saves for future auto-warning
+memory_record_learning(scope, pattern, fix)   → saves a verified pattern
+memory_save(task, steps)                      → saves a successful strategy
+```
+
+Memory is **auto-injected** into tool responses via the wrapper — you'll see `⚡ Memory:` hints when a tool has failed before or matches a known strategy. You don't need to call `memory_recall` every time.
+
+### Playbook = Executable (runs the task for you)
+
+A playbook is the **recipe**. It contains everything needed to automate a platform. A playbook can be:
+
+**1. Reference-only** (most current playbooks) — has `selectors{}`, `flows{}`, `errors[]` but NO `steps[]`:
+```json
+{
+  "id": "figma",
+  "selectors": { "toolbar": { "rectangle": "[data-testid='Rectangle-tool']" } },
+  "flows": { "create_file": { "steps": ["Click new file button", "Wait for canvas"] } },
+  "errors": [{ "error": "DOM clicks don't work on canvas", "solution": "Use CDP Input.dispatchMouseEvent" }]
+}
+```
+→ You still do the work manually, but the playbook **tells you which selectors to use, what errors to expect, and how to fix them**. The ContextTracker auto-injects this as ⚠ and 💡 hints.
+
+**2. Executable** — has a top-level `steps[]` array with machine-runnable actions:
+```json
+{
+  "id": "canva-smoke-test",
+  "steps": [
+    { "action": "navigate", "url": "https://canva.com", "description": "Open Canva" },
+    { "action": "press", "target": "[data-testid='create-button']", "description": "Click Create" },
+    { "action": "wait", "ms": 2000, "description": "Wait for editor" }
+  ]
+}
+```
+→ This can run **hands-free** via `job_create(task="...", playbookId="canva-smoke-test")` + `job_run`. No manual work needed.
+
+**3. Both** — has reference metadata AND executable steps. Best of both worlds: auto-runs the steps, and if a step fails, the AI recovery system uses the selectors/errors/flows to figure out what went wrong.
+
+### The lifecycle: Reference → Executable
+
+Playbooks start as reference and can evolve into executable:
+
+```
+Session 1: No playbook exists
+  → You automate manually
+  → export_playbook() saves URLs, selectors, errors as REFERENCE playbook
+  → session_release() flushes auto-discovered selectors
+
+Session 2: Reference playbook exists
+  → ContextTracker auto-injects hints (⚠ errors, 💡 selectors)
+  → You work faster because you know what works
+  → PlaybookRunner (via jobs) can use AI-guided mode with playbook as context
+
+Session 3+: After enough successful runs
+  → PlaybookRunner auto-saves successful AI step sequences as executable steps[]
+  → Playbook becomes EXECUTABLE
+  → job_create(playbookId=...) runs it fully automated
+```
 
 ### Available Playbooks
 
-| Platform | File | Type |
-|----------|------|------|
-| X/Twitter | `playbooks/x-twitter.json`, `playbooks/twitter.json`, `playbooks/x_v1.json` | Reference (selectors, flows, errors) |
-| Instagram | `playbooks/instagram.json` | Reference |
-| LinkedIn | `playbooks/linkedin.json` | Reference |
-| Threads | `playbooks/threads.json` | Reference |
-| Reddit | `playbooks/reddit.json` | Reference |
-| Discord | `playbooks/discord.json` | Reference |
-| Figma | `playbooks/figma.json` | Reference (131 successes, battle-tested) |
-| Codex Desktop | `playbooks/codex-desktop.json` | Reference |
-| Dev.to | `playbooks/devto.json` | Reference (flows + detection + errors) |
-| Devpost | `playbooks/devpost.json` | Reference (flows + errors + captcha notes) |
-| YouTube | `playbooks/youtube.json` | Reference |
-| DaVinci Resolve | `playbooks/davinci-resolve-*.json` | Executable steps |
-| n8n | `playbooks/n8n.json` | Reference |
-| Canva | `playbooks/canva-smoke-test.json` | Executable steps |
+| Platform | File | Has steps[] | Has selectors/flows/errors |
+|----------|------|:-----------:|:--------------------------:|
+| Figma | `playbooks/figma.json` | No | Yes (131 successes, battle-tested) |
+| X/Twitter | `playbooks/x-twitter.json` | No | Yes |
+| Instagram | `playbooks/instagram.json` | No | Yes |
+| LinkedIn | `playbooks/linkedin.json` | No | Yes |
+| Threads | `playbooks/threads.json` | No | Yes |
+| Reddit | `playbooks/reddit.json` | No | Yes |
+| Discord | `playbooks/discord.json` | No | Yes |
+| Devpost | `playbooks/devpost.json` | No | Yes (flows + detection + captcha notes) |
+| Dev.to | `playbooks/devto.json` | No | Yes |
+| YouTube | `playbooks/youtube.json` | No | Yes |
+| n8n | `playbooks/n8n.json` | No | Yes |
+| Codex Desktop | `playbooks/codex-desktop.json` | No | Yes |
+| DaVinci Resolve | `playbooks/davinci-resolve-*.json` | **Yes** | No |
+| Canva | `playbooks/canva-smoke-test.json` | **Yes** | No |
 
-**Type meanings:**
-- **Reference** = has selectors, flows, errors but no executable steps → AI uses as context
-- **Executable** = has `steps[]` array → can be auto-run via `job_create(playbookId=...)`
+### How to use each type
+
+**Reference playbook (no steps[]):**
+```
+1. platform_guide(platform="figma")           → Read selectors, flows, errors
+2. Use the selectors from flows in your browser_* calls
+3. Follow the flow steps as your manual guide
+4. Check errors[] before trying something the playbook warns about
+   (or just read the ⚠ hints auto-injected into tool responses)
+```
+
+**Executable playbook (has steps[]):**
+```
+1. job_create(task="Smoke test Canva", playbookId="canva-smoke-test")
+2. job_run(jobId)                             → Runs all steps automatically
+3. job_status(jobId)                          → Check if it succeeded
+   If a step fails → AI recovery kicks in → patches playbook for next time
+```
 
 ### When to use platform_guide vs rely on auto-injection
 
 | Situation | What to do |
 |-----------|-----------|
-| Starting automation on a platform | Call `platform_guide(platform)` once to see full playbook |
+| Starting automation on a platform | Call `platform_guide(platform)` once to see the full picture |
 | Mid-execution | Just read the ⚠/💡/📋 hints in tool responses — they're auto-injected |
 | Hit an error | Check `platform_guide(platform, section="errors")` for known solutions |
 | Want to see all selectors | `platform_guide(platform, section="selectors")` |
+| Want to see step-by-step flows | `platform_guide(platform, section="flows")` |
 
-### Playbook structure
+### Playbook JSON structure
 
 ```json
 {
-  "steps": [ ... ],          // Executable automation steps (if available)
-  "selectors": { ... },      // CSS selectors grouped by UI area
-  "flows": { ... },          // Step-by-step action recipes with guards
-  "errors": [ ... ],         // Known pitfalls + solutions (auto-injected!)
-  "detection": { ... },      // JS expressions to check page state
-  "urls": { ... },           // Named URLs for the platform
-  "policyNotes": { ... },    // Rate limits, safety rules
-  "successCount": 0,         // Reliability tracking
-  "failCount": 0
+  "id": "platform-name",
+  "name": "Human readable name",
+  "platform": "platform",
+  "version": "1.0.0",
+  "successCount": 0,
+  "failCount": 0,
+
+  "steps": [ ... ],          // EXECUTABLE: machine-runnable PlaybookStep objects
+                              // Actions: navigate, press, type_into, extract, key_combo, scroll, wait, screenshot
+
+  "selectors": {             // REFERENCE: CSS selectors grouped by UI area
+    "toolbar": { "search": "[data-testid='search']", "menu": "[aria-label='Menu']" },
+    "editor": { "canvas": "canvas.main", "save": "[data-testid='save']" }
+  },
+
+  "flows": {                 // REFERENCE: human-readable step sequences with guards
+    "login": {
+      "steps": ["Navigate to /login", "Fill email field", "Fill password", "Click submit"],
+      "guards": ["Must not be already logged in"],
+      "why": "Why this flow works this way"
+    }
+  },
+
+  "errors": [                // REFERENCE: known pitfalls (auto-injected as ⚠ hints!)
+    {
+      "error": "el.click() doesn't work on canvas",
+      "context": "Figma editor WebGL canvas",
+      "solution": "Use CDP Input.dispatchMouseEvent via browser_human_click",
+      "severity": "high"
+    }
+  ],
+
+  "detection": {             // REFERENCE: JS expressions to check page state
+    "is_logged_in": "!!document.querySelector('[data-testid=\"home\"]')",
+    "is_editor": "!!document.querySelector('canvas')"
+  },
+
+  "urls": {                  // REFERENCE: named URLs for the platform
+    "home": "https://platform.com",
+    "editor": "https://platform.com/editor/{id}"
+  },
+
+  "policyNotes": {           // REFERENCE: rate limits, safety rules
+    "rate_limits": ["Max 8 posts/hour", "3-5s delay between actions"]
+  }
 }
 ```
 
-### Creating/Improving Playbooks
+### Creating & Improving Playbooks
 
-Playbooks improve in two ways:
+**Automatic improvement (every session, zero effort):**
+- ContextTracker collects tool outcomes in-memory during execution
+- On `session_release` (or every 50 tool calls), it flushes:
+  - Selectors that worked 2+ times → added to `selectors.auto_discovered`
+  - Error patterns seen 2+ times → added to `errors[]`
+- PlaybookRunner (via jobs) saves successful AI step sequences as `steps[]`
+- One atomic disk write — no performance cost during execution
 
-**Automatic (every session):**
-- Selectors that work 2+ times → auto-added to `selectors.auto_discovered`
-- Error patterns seen 2+ times → auto-added to `errors[]`
-- Triggers on `session_release` or every 50 tool calls
-
-**Manual (when you want to save a full playbook):**
+**Manual export (when you want to save a full playbook):**
 ```
 export_playbook(platform="twitter", domain="x.com", description="Twitter automation")
 ```
-This pulls URLs, selectors, errors, and strategies from memory and saves to `playbooks/twitter.json`.
+Pulls URLs, selectors, errors, and strategies from memory → saves to `playbooks/twitter.json`.
+
+**Converting reference → executable:**
+To add executable steps to a reference playbook, either:
+1. Use `job_create` without a playbookId — PlaybookRunner uses AI mode, and on success auto-saves the step sequence as a new playbook
+2. Manually add a `steps[]` array to the playbook JSON following the PlaybookStep format
 
 ---
 
