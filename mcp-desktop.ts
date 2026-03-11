@@ -53,6 +53,9 @@ import { JOB_STATES } from "./src/jobs/types.js";
 import { PlaybookEngine } from "./src/playbook/engine.js";
 import { PlaybookStore } from "./src/playbook/store.js";
 import { ContextTracker } from "./src/context-tracker.js";
+import { McpPlaybookRecorder } from "./src/playbook/mcp-recorder.js";
+import { discoverWebElements, testWebElement, compileReference, saveExploreResult, discoverNativeElements } from "./src/platform/explorer.js";
+import { buildDocUrls, crawlPage, compileLearnResult, saveLearnResult } from "./src/platform/learner.js";
 import { AccessibilityAdapter } from "./src/runtime/accessibility-adapter.js";
 import { AutomationRuntimeService } from "./src/runtime/service.js";
 import { TimelineLogger } from "./src/logging/timeline-logger.js";
@@ -131,6 +134,7 @@ const referencesDir = path.resolve(__dirname, "references");
 const _playbookStoreForContext = new PlaybookStore(referencesDir);
 _playbookStoreForContext.load();
 const contextTracker = new ContextTracker(_playbookStoreForContext, path.resolve(__dirname, "playbooks"));
+const mcpRecorder = new McpPlaybookRecorder(path.resolve(__dirname, "playbooks"));
 
 // Skip logging for memory tools themselves
 const MEMORY_TOOLS = new Set([
@@ -146,6 +150,8 @@ const MEMORY_TOOLS = new Set([
   "job_run", "job_run_all",
   "worker_start", "worker_stop", "worker_status",
   "playbook_preflight", "platform_guide", "export_playbook",
+  "playbook_record", "platform_learn", "platform_explore",
+  "job_create_chain",
 ]);
 
 // Track the strategy we're currently following (for feedback loop)
@@ -208,6 +214,12 @@ function extractText(result: any): string {
 
       // ── POST-CALL: record success for playbook learning (in-memory only) ──
       contextTracker.recordOutcome(toolName, safeParams, true, null);
+
+      // ── POST-CALL: capture for playbook recording if active ──
+      if (mcpRecorder.isRecording) {
+        const resultText = Array.isArray(result?.content) ? result.content.map((c: any) => c.text ?? "").join(" ").substring(0, 500) : "";
+        mcpRecorder.captureToolCall(toolName, safeParams, true, resultText, durationMs);
+      }
 
       // ── POST-CALL: auto-recall hints (~0ms, in-memory) ──
       const hints: string[] = [];
@@ -278,6 +290,11 @@ function extractText(result: any): string {
 
       // ── Record failure for playbook learning (in-memory only) ──
       contextTracker.recordOutcome(toolName, safeParams, false, errorMsg);
+
+      // ── Capture failure for playbook recording ──
+      if (mcpRecorder.isRecording) {
+        mcpRecorder.captureToolCall(toolName, safeParams, false, errorMsg, durationMs);
+      }
 
       // Record strategy failure if we were following one
       if (activeStrategyFingerprint) {
@@ -1340,6 +1357,180 @@ server.tool("export_playbook", "Generate a playbook JSON from your session. Extr
         JSON.stringify(playbook, null, 2),
     }],
   };
+});
+
+// ═══════════════════════════════════════════════
+// PLAYBOOK RECORD — macro recorder for MCP tool calls
+// ═══════════════════════════════════════════════
+
+server.tool("playbook_record", "Macro recorder: start recording, do the flow, stop to save as executable playbook. Captures every click/type/navigate tool call as a PlaybookStep.", {
+  action: z.enum(["start", "stop", "cancel", "status"]).describe("start/stop/cancel/status"),
+  platform: z.string().optional().describe("Platform name (required for start)"),
+  name: z.string().optional().describe("Playbook name (required for stop)"),
+  description: z.string().optional().describe("Playbook description (for stop)"),
+  cdpPort: z.number().optional().describe("CDP port if needed for browser_js steps (e.g. 9333 for Codex)"),
+}, async ({ action, platform, name, description, cdpPort }) => {
+  switch (action) {
+    case "start": {
+      if (!platform) return { content: [{ type: "text", text: "Error: platform is required for start" }] };
+      if (mcpRecorder.isRecording) return { content: [{ type: "text", text: "Already recording. Call stop or cancel first." }] };
+      mcpRecorder.start(platform, cdpPort ?? undefined);
+      return { content: [{ type: "text", text: `Recording started for "${platform}". All subsequent tool calls will be captured.\nCall playbook_record(action="stop", name="...") when done.` }] };
+    }
+    case "stop": {
+      if (!mcpRecorder.isRecording) return { content: [{ type: "text", text: "No active recording." }] };
+      if (!name) return { content: [{ type: "text", text: "Error: name is required for stop" }] };
+      const playbook = mcpRecorder.stop(name, description ?? name);
+      const stepList = playbook.steps.map((s, i) => `  ${i + 1}. [${s.action}] ${s.description ?? ""}`).join("\n");
+      return { content: [{ type: "text", text: `Playbook saved: playbooks/${playbook.id}.json (${playbook.steps.length} steps)\n\n${stepList}` }] };
+    }
+    case "cancel": {
+      mcpRecorder.cancel();
+      return { content: [{ type: "text", text: "Recording cancelled." }] };
+    }
+    case "status": {
+      if (!mcpRecorder.isRecording) return { content: [{ type: "text", text: "Not recording." }] };
+      const steps = mcpRecorder.getSteps().map((s, i) => `  ${i + 1}. [${s.action}] ${s.description ?? ""}`).join("\n");
+      return { content: [{ type: "text", text: `Recording active: ${mcpRecorder.stepCount} steps captured\n${steps}` }] };
+    }
+  }
+});
+
+// ═══════════════════════════════════════════════
+// PLATFORM EXPLORE — autonomous app exploration
+// ═══════════════════════════════════════════════
+
+server.tool("platform_explore", "Autonomously explore an app or website. Maps all interactive elements, tries each one, records working selectors and broken paths. Outputs a reference JSON.", {
+  platform: z.string().describe("Platform name for the output file, e.g. 'figma', 'canva'"),
+  url: z.string().optional().describe("URL for web app. Requires Chrome with --remote-debugging-port."),
+  bundleId: z.string().optional().describe("macOS bundle ID for native app, e.g. 'com.figma.Desktop'"),
+  maxElements: z.number().optional().describe("Max elements to test (default: 30)"),
+  tabId: z.string().optional().describe("Existing Chrome tab ID if page is already open"),
+}, async ({ platform, url, bundleId, maxElements, tabId }) => {
+  const max = maxElements ?? 30;
+
+  if (url || tabId) {
+    // Web exploration via CDP
+    const { CDP: cdp, port } = await ensureCDP();
+    let targetId = tabId;
+    if (!targetId) {
+      if (url) {
+        // Navigate to URL in a new tab
+        const targets = await cdp.List({ port });
+        const page = targets.find((t: any) => t.type === "page");
+        if (!page) throw new Error("No Chrome tabs open");
+        targetId = page.id;
+        const client = await cdp({ port, target: targetId });
+        await client.Page.enable();
+        await client.Page.navigate({ url });
+        await new Promise(r => setTimeout(r, 3000));
+        await client.close();
+      }
+    }
+    if (!targetId) throw new Error("No tab available");
+
+    const client = await cdp({ port, target: targetId });
+    await client.Runtime.enable();
+
+    const evaluate = async (expr: string) => {
+      return client.Runtime.evaluate({ expression: expr, returnByValue: true, awaitPromise: true });
+    };
+
+    // Discover elements
+    const elements = await discoverWebElements(evaluate, max);
+
+    // Test each element
+    const tested = [];
+    for (const el of elements) {
+      const result = await testWebElement(evaluate, el);
+      tested.push(result);
+      await new Promise(r => setTimeout(r, 300 + Math.random() * 500));
+    }
+
+    await client.close();
+
+    // Compile and save
+    const result = compileReference(platform, "web", tested, url);
+    const filePath = saveExploreResult(referencesDir, result);
+
+    return { content: [{ type: "text", text: `Exploration complete: ${filePath}\n\nElements found: ${elements.length}\nTested: ${result.testedElements}\nWorking selectors: ${result.workingSelectors}\nErrors: ${result.errors.length}\n\nKey discoveries:\n${result.keyDiscoveries.map(d => `  - ${d}`).join("\n")}` }] };
+
+  } else if (bundleId) {
+    // Native app exploration via bridge
+    await ensureBridge();
+    const apps = await bridge.call<Array<{ bundleId: string; pid: number }>>("app.list");
+    const app = apps.find(a => a.bundleId === bundleId);
+    if (!app) {
+      await bridge.call("app.launch", { bundleId });
+      await new Promise(r => setTimeout(r, 3000));
+    }
+    const appList = await bridge.call<Array<{ bundleId: string; pid: number }>>("app.list");
+    const target = appList.find(a => a.bundleId === bundleId);
+    if (!target) throw new Error(`App ${bundleId} not running`);
+
+    const elements = await discoverNativeElements(bridge, target.pid, max);
+
+    // For native apps, we record discovery but don't auto-click (too risky)
+    const result = compileReference(platform, "native", elements.map(el => ({
+      ...el, clickWorked: true, result: "discovered_not_tested",
+    })), undefined, bundleId);
+    const filePath = saveExploreResult(referencesDir, result);
+
+    return { content: [{ type: "text", text: `Native app exploration complete: ${filePath}\n\nElements discovered: ${elements.length}\n(Native elements discovered but not auto-clicked for safety. Use playbook_record to test interactively.)` }] };
+
+  } else {
+    return { content: [{ type: "text", text: "Error: Provide either url (for web apps) or bundleId (for native apps)." }] };
+  }
+});
+
+// ═══════════════════════════════════════════════
+// PLATFORM LEARN — scrape docs/help/shortcuts
+// ═══════════════════════════════════════════════
+
+server.tool("platform_learn", "Scrape official docs, help center, keyboard shortcuts for a platform. Crawls pages via Chrome and extracts structured data into a reference JSON.", {
+  platform: z.string().describe("Platform name, e.g. 'figma', 'notion', 'slack'"),
+  url: z.string().optional().describe("Root URL to start from. If omitted, guesses from platform name."),
+  maxPages: z.number().optional().describe("Max pages to crawl (default: 5)"),
+}, async ({ platform, url, maxPages }) => {
+  const max = maxPages ?? 5;
+  const urls = buildDocUrls(platform, url);
+
+  const { CDP: cdp, port } = await ensureCDP();
+  const targets = await cdp.List({ port });
+  const page = targets.find((t: any) => t.type === "page");
+  if (!page) throw new Error("No Chrome tabs open. Open Chrome first.");
+
+  const client = await cdp({ port, target: page.id });
+  await client.Runtime.enable();
+  await client.Page.enable();
+
+  const crawled: Array<{ url: string; content?: any; shortcuts?: Record<string, string>; selectors?: Record<string, string> }> = [];
+  let successCount = 0;
+
+  for (const docUrl of urls) {
+    if (successCount >= max) break;
+    try {
+      const result = await crawlPage(client, docUrl, 8000);
+      if (result.success && result.content && result.content.text.length > 100) {
+        crawled.push({ url: docUrl, content: result.content, ...(result.shortcuts ? { shortcuts: result.shortcuts } : {}), ...(result.selectors ? { selectors: result.selectors } : {}) });
+        successCount++;
+      }
+    } catch {
+      // Skip failed URLs silently
+    }
+    await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
+  }
+
+  await client.close();
+
+  if (crawled.length === 0) {
+    return { content: [{ type: "text", text: `No documentation pages found for "${platform}". Try providing a specific URL.` }] };
+  }
+
+  const result = compileLearnResult(platform, crawled);
+  const filePath = saveLearnResult(referencesDir, result);
+
+  return { content: [{ type: "text", text: `Learning complete: ${filePath}\n\nPages crawled: ${crawled.length}\nShortcuts found: ${Object.keys(result.shortcuts).length}\nFeatures found: ${result.features.length}\nSelectors found: ${Object.values(result.selectors).reduce((n, g) => n + Object.keys(g).length, 0)}\nAPI endpoints: ${result.apiEndpoints.length}\nKnown limitations: ${result.knownLimitations.length}` }] };
 });
 
 // ═══════════════════════════════════════════════

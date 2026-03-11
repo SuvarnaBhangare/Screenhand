@@ -148,6 +148,9 @@ These control Chrome via CDP (Chrome DevTools Protocol). They work **in the back
 |------|-------------|-------------|
 | `playbook_preflight` | Quick feasibility check — scans for captchas, WebGL, shadow DOM, React quirks | **Before starting** any new platform automation |
 | `platform_guide` | Get playbook knowledge — selectors, flows, errors, detection | **Before starting** — check what's already known |
+| `platform_learn` | Scrape docs/help/shortcuts for a platform via CDP | **First time** on a platform — bootstrap reference from docs |
+| `platform_explore` | Autonomously discover and test all interactive UI elements | **First time** — map clickable elements, find working selectors |
+| `playbook_record` | Macro recorder — captures your MCP tool calls as playbook steps | Record an expert doing a task → instant executable playbook |
 | `export_playbook` | Save session learnings as a reusable playbook | **After finishing** a successful automation |
 
 ### Job Tools (auto-execute playbooks)
@@ -744,6 +747,87 @@ Each job in the chain runs the full playbook (clear editor, type prompt, submit,
 
 ---
 
+## Platform Discovery Tools
+
+Three tools for rapidly learning about new platforms and building automation without manual exploration.
+
+### `platform_learn` — Scrape docs, shortcuts, and features
+
+Crawls a platform's official documentation, help center, and changelog pages via CDP. Extracts keyboard shortcuts, interactive element selectors, features, API endpoints, and known limitations. Saves as a reference JSON.
+
+```
+platform_learn(platform="canva", rootUrl="https://canva.com", maxPages=5)
+→ Crawled 4 docs pages. Found 12 shortcuts, 28 features.
+→ Saved to references/canva-learned.json
+```
+
+Use this when you're automating a platform for the first time and want to bootstrap a reference file with shortcuts, selectors, and features — instead of discovering them one-by-one during execution.
+
+### `platform_explore` — Autonomously map an app's UI
+
+Discovers all interactive elements on a web page (via CDP) or native app (via AX bridge), then tests each one by clicking and recording the result. Produces a reference JSON with working selectors, navigation links, and broken elements.
+
+```
+# Web app (via CDP)
+platform_explore(platform="canva", source="web", url="https://canva.com/design/editor")
+→ Found 47 interactive elements, 31 clickable, 8 broken, 3 skipped (dangerous)
+→ Saved to references/canva-explore.json
+
+# Native app (via AX bridge)
+platform_explore(platform="figma", source="native", bundleId="com.figma.Desktop")
+→ Found 23 AX elements, 18 clickable
+→ Saved to references/figma-explore.json
+```
+
+Dangerous buttons (delete, logout, sign out, etc.) are automatically skipped. Use this to rapidly map an unfamiliar app's UI before writing playbook steps.
+
+### `playbook_record` — Macro recorder for MCP tool calls
+
+Records your MCP tool calls as you work and saves them as an executable playbook. Like a macro recorder, but for AI tool calls.
+
+```
+# Start recording
+playbook_record(action="start", platform="canva", cdpPort=9222)
+→ Recording started for canva
+
+# ... do your work using browser_*, click, type_text, etc. ...
+# Every action tool call is captured as a PlaybookStep
+
+# Check progress
+playbook_record(action="status")
+→ Recording: canva, 7 steps captured
+
+# Stop and save
+playbook_record(action="stop", name="Canva Create Design", description="Creates a new design from template")
+→ Saved playbook: canva-m1abc.json (7 steps)
+
+# Or cancel without saving
+playbook_record(action="cancel")
+```
+
+The recorder automatically:
+- Skips observation-only tools (ui_tree, browser_dom, memory_*, etc.)
+- Maps MCP tool names to PlaybookStep actions (browser_navigate→navigate, click→press, etc.)
+- Deduplicates consecutive identical steps
+- Marks failed steps as `optional: true`
+
+**Best workflow:** Have an expert do the task once while recording → instant executable playbook.
+
+### Discovery → Playbook Pipeline
+
+Combine all three for fastest ramp-up on a new platform:
+
+```
+1. platform_learn(platform="canva")           → Bootstrap reference from docs
+2. platform_explore(platform="canva", ...)    → Map actual UI elements
+3. playbook_record(action="start", ...)       → Start recording
+4. ... do the task manually once ...          → Expert walkthrough
+5. playbook_record(action="stop", ...)        → Save as executable playbook
+6. job_create(playbookId="canva-m1abc")       → Now it runs hands-free
+```
+
+---
+
 ## Desktop App Automation
 
 For native macOS/Windows apps (not browser):
@@ -791,6 +875,9 @@ BEFORE STARTING (do these first!)
   Check if a site is automatable    → playbook_preflight(url, task)
   See what's known about a platform → platform_guide(platform)
   Auto-run a known playbook         → job_create(task, playbookId) + job_run
+  Learn a platform from its docs    → platform_learn(platform, rootUrl)
+  Map all UI elements automatically → platform_explore(platform, source, url)
+  Record actions as a playbook      → playbook_record(action="start/stop")
 
 BROWSER AUTOMATION
   See what tabs are open            → browser_tabs
