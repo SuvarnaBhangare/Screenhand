@@ -1,0 +1,52 @@
+{
+  "platform": "twitter",
+  "version": "1.0.0",
+  "updated": "2026-03-08",
+  "description": "Twitter/X posting automation",
+  "urls": {
+    "home": "https://x.com/home",
+    "NASA": "https://x.com/NASA",
+    "compose_post": "https://x.com/compose/post",
+    "explore": "https://x.com/explore",
+    "i_chat": "https://x.com/i/chat",
+    "i_chat_2029527963": "https://x.com/i/chat/2029527963",
+    "i_chat_pin_recovery": "https://x.com/i/chat/pin/recovery?from=%2Fi%2Fchat",
+    "i_graduatedaccess": "https://x.com/i/graduated-access?graduatedAccessScribeSrc=compose",
+    "messages": "https://x.com/messages",
+    "screenhand_": "https://x.com/screenhand_",
+    "search": "https://x.com/search?q=ScreenHand%20automation&src=typed_query"
+  },
+  "flows": {
+    "discovered": {
+      "steps": [
+        "browser_tabs({})",
+        "browser_js({\"code\":\"(() => {\\n  const svgs = document.querySelectorAll('svg[aria-label], [data-testid]');\\n  const labels = new Set();\\n  const testIds = new Set();\\n  svgs.forEach(s => {\\n    const label = s.getAttribute('aria-label');\\n    const testId = s.getAttribute('data-testid');\\n    if (label) labels.add(label);\\n    if (testId) testIds.add(testId);\\n  });\\n\\n  const navLinks = new Set();\\n  document.querySelectorAll('a[href]').forEach(l => {\\n    const href = l.getAttribute('href');\\n    if (href && href.startsWith('/') && href.length < 30) navLinks.add(href);\\n  });\\n\\n  const inputs = [];\\n  document.querySelectorAll('textarea, input[type=\\\"text\\\"], div[role=\\\"textbox\\\"], div[contenteditable]').forEach(i => {\\n    inputs.push({ tag: i.tagName, placeholder: i.placeholder || i.getAttribute('aria-label') || i.getAttribute('data-testid') });\\n  });\\n\\n  return {\\n    title: document.title,\\n    url: window.location.href,\\n    ariaLabels: [...labels].slice(0, 30),\\n    testIds: [...testIds].slice(0, 30),\\n    navLinks: [...navLinks].slice(0, 15),\\n    inputs\\n  };\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_navigate({\"url\":\"https://x.com/home\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  return new Promise(resolve => {\\n    setTimeout(() => {\\n      // Extract feed posts\\n      const tweets = document.querySelectorAll('article[data-testid=\\\"tweet\\\"]');\\n      const posts = [];\\n      tweets.forEach((t, i) => {\\n        if (i >= 5) return;\\n        const username = t.querySelector('div[data-testid=\\\"User-Name\\\"]')?.textContent?.trim();\\n        const text = t.querySelector('div[data-testid=\\\"tweetText\\\"]')?.textContent?.trim();\\n        const hasLike = !!t.querySelector('[data-testid=\\\"like\\\"]');\\n        const hasReply = !!t.querySelector('[data-testid=\\\"reply\\\"]');\\n        const hasRetweet = !!t.querySelector('[data-testid=\\\"retweet\\\"]');\\n        const hasBookmark = !!t.querySelector('[data-testid=\\\"bookmark\\\"]');\\n        posts.push({ username: username?.substring(0, 50), text: text?.substring(0, 80), hasLike, hasReply, hasRetweet, hasBookmark });\\n      });\\n      \\n      // Get all testids for post actions\\n      const firstTweet = tweets[0];\\n      const actionTestIds = [];\\n      if (firstTweet) {\\n        firstTweet.querySelectorAll('[data-testid]').forEach(el => {\\n          actionTestIds.push(el.getAttribute('data-testid'));\\n        });\\n      }\\n\\n      resolve({ tweetCount: tweets.length, posts, actionTestIds });\\n    }, 2000);\\n  });\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_human_click({\"selector\":\"article[data-testid=\\\"tweet\\\"]:first-of-type [data-testid=\\\"like\\\"]\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  const tweet = document.querySelector('article[data-testid=\\\"tweet\\\"]');\\n  const unlike = tweet?.querySelector('[data-testid=\\\"unlike\\\"]');\\n  return unlike ? 'LIKED! Heart is red.' : 'Like may not have registered';\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_human_click({\"selector\":\"article[data-testid=\\\"tweet\\\"]:first-of-type [data-testid=\\\"reply\\\"]\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  return new Promise(resolve => {\\n    setTimeout(() => {\\n      const dialog = document.querySelector('div[role=\\\"dialog\\\"]');\\n      const textbox = document.querySelector('div[role=\\\"textbox\\\"][data-testid=\\\"tweetTextarea_0\\\"], div[data-testid=\\\"tweetTextarea_0\\\"]');\\n      const inputs = [];\\n      document.querySelectorAll('div[role=\\\"textbox\\\"], div[data-testid*=\\\"tweetText\\\"]').forEach(i => {\\n        inputs.push({ testId: i.getAttribute('data-testid'), role: i.getAttribute('role'), editable: i.contentEditable });\\n      });\\n      resolve({ hasDialog: !!dialog, hasTextbox: !!textbox, inputs });\\n    }, 1500);\\n  });\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_fill_form({\"selector\":\"div[data-testid=\\\"tweetTextarea_0\\\"][role=\\\"textbox\\\"]\",\"text\":\"Automated reply via ScreenHand CDP tools!\",\"delayMs\":70,\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  const buttons = document.querySelectorAll('button[data-testid=\\\"tweetButton\\\"], button[data-testid=\\\"tweetButtonInline\\\"]');\\n  for (const b of buttons) {\\n    b.click();\\n    return `Clicked: ${b.getAttribute('data-testid')}`;\\n  }\\n  return 'Tweet button not found';\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_human_click({\"selector\":\"article[data-testid=\\\"tweet\\\"]:first-of-type [data-testid=\\\"retweet\\\"]\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  return new Promise(resolve => {\\n    setTimeout(() => {\\n      const menuItems = document.querySelectorAll('div[role=\\\"menuitem\\\"], div[data-testid=\\\"retweetConfirm\\\"], div[data-testid=\\\"unretweet\\\"]');\\n      const items = [];\\n      menuItems.forEach(m => items.push({ testId: m.getAttribute('data-testid'), text: m.textContent?.trim()?.substring(0, 30) }));\\n      resolve({ items });\\n    }, 1000);\\n  });\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  // Check for retweet dropdown menu more broadly\\n  const allItems = document.querySelectorAll('[role=\\\"menuitem\\\"], [role=\\\"menu\\\"] *, div[id=\\\"layers\\\"] *');\\n  const texts = new Set();\\n  allItems.forEach(el => {\\n    const t = el.textContent?.trim();\\n    if (t && t.length > 1 && t.length < 30) texts.add(t);\\n  });\\n  \\n  // Also look for data-testid containing retweet\\n  const retweetEls = document.querySelectorAll('[data-testid*=\\\"retweet\\\"], [data-testid*=\\\"Retweet\\\"]');\\n  const testIds = [];\\n  retweetEls.forEach(el => testIds.push(el.getAttribute('data-testid')));\\n  \\n  return { menuTexts: [...texts].slice(0, 15), retweetTestIds: testIds };\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  // Click the retweet button on the first tweet more precisely\\n  const tweet = document.querySelector('article[data-testid=\\\"tweet\\\"]');\\n  const retweetBtn = tweet?.querySelector('[data-testid=\\\"retweet\\\"]');\\n  if (!retweetBtn) return 'No retweet button';\\n  \\n  const rect = retweetBtn.getBoundingClientRect();\\n  return { x: rect.x + rect.width/2, y: rect.y + rect.height/2, width: rect.width, height: rect.height };\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_click({\"selector\":\"article[data-testid=\\\"tweet\\\"] [data-testid=\\\"retweet\\\"]\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  return new Promise(resolve => {\\n    setTimeout(() => {\\n      // Look in the layers div for the dropdown\\n      const layers = document.querySelector('div[id=\\\"layers\\\"]');\\n      if (!layers) return resolve({ layers: false });\\n      \\n      const items = layers.querySelectorAll('[role=\\\"menuitem\\\"]');\\n      const menuItems = [];\\n      items.forEach(m => menuItems.push({ testId: m.getAttribute('data-testid'), text: m.textContent?.trim() }));\\n      \\n      // Also check broader\\n      const allClickable = layers.querySelectorAll('div[role=\\\"button\\\"], button, a');\\n      const clickTexts = [];\\n      allClickable.forEach(c => {\\n        const t = c.textContent?.trim();\\n        if (t && t.length < 30) clickTexts.push(t);\\n      });\\n      \\n      resolve({ layers: true, menuItems, clickTexts });\\n    }, 1000);\\n  });\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})",
+        "browser_js({\"code\":\"(() => {\\n  // Check for any overlay/modal blocking interaction\\n  const layers = document.querySelector('div[id=\\\"layers\\\"]');\\n  const children = [];\\n  if (layers) {\\n    layers.children[0]?.querySelectorAll('div, span, input').forEach(el => {\\n      const t = el.textContent?.trim();\\n      const tag = el.tagName;\\n      const type = el.type;\\n      const ph = el.placeholder;\\n      if ((t && t.length > 2 && t.length < 50) || ph) {\\n        children.push({ tag, text: t?.substring(0, 40), type, placeholder: ph });\\n      }\\n    });\\n  }\\n  return { layerChildren: children.slice(0, 15) };\\n})()\",\"tabId\":\"38D17DD0A099A9CF6137F60932C98F15\"})"
+      ],
+      "selectors": {}
+    }
+  },
+  "detection": {
+    "is_logged_in": "// Add detection JS for logged-in state"
+  },
+  "errors": [],
+  "_meta": {
+    "exported_from": "screenhand",
+    "actions_count": 19,
+    "strategies_count": 6
+  }
+}

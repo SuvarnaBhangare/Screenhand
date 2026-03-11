@@ -13,6 +13,8 @@
  *   4. FLUSH           — on session_release or every N actions, merge learnings into playbook
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import type { Playbook, PlaybookError } from "./playbook/types.js";
 import type { PlaybookStore } from "./playbook/store.js";
 
@@ -72,7 +74,10 @@ export class ContextTracker {
   private learnings: ToolOutcome[] = [];
   private actionCount = 0;
 
-  constructor(private readonly store: PlaybookStore) {}
+  constructor(
+    private readonly store: PlaybookStore,
+    private readonly execPlaybooksDir?: string,
+  ) {}
 
   // ═══════════════════════════════════════════════
   // 1. DETECT — update context when domain changes
@@ -136,13 +141,18 @@ export class ContextTracker {
       }
     }
 
-    // If playbook has executable steps and this looks like manual execution
-    if (hints.length < 2 && this.context.playbook.steps.length > 0) {
+    // Check if an executable playbook exists in playbooks/ dir
+    if (hints.length < 2 && this.execPlaybooksDir) {
       const pb = this.context.playbook;
-      const rate = pb.successCount + pb.failCount > 0
-        ? Math.round((pb.successCount / (pb.successCount + pb.failCount)) * 100)
-        : 0;
-      hints.push(`📋 Playbook "${pb.id}" has ${pb.steps.length} steps (${rate}% success). Use job_create(task=..., playbookId="${pb.id}") for auto-execution.`);
+      const execPath = path.join(this.execPlaybooksDir, `${pb.id}.json`);
+      try {
+        if (fs.existsSync(execPath)) {
+          const execPb = JSON.parse(fs.readFileSync(execPath, "utf-8"));
+          if (Array.isArray(execPb.steps) && execPb.steps.length > 0) {
+            hints.push(`📋 Executable playbook "${pb.id}" has ${execPb.steps.length} steps. Use job_create(task=..., playbookId="${pb.id}") for auto-execution.`);
+          }
+        }
+      } catch { /* skip — don't break hints for a file read error */ }
     }
 
     return hints;

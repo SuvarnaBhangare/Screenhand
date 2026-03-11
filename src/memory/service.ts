@@ -152,7 +152,7 @@ export class MemoryService {
     // Seed learnings from playbooks — selectors, detection, policy notes.
     // These have scope prefixes like "chrome/figma" so they merge cleanly
     // with runtime-discovered learnings without duplicating.
-    const playbooksDir = path.join(this.baseDir, "playbooks");
+    const playbooksDir = path.join(this.baseDir, "references");
     const pbLearnings = seedLearningsFromPlaybooks(playbooksDir);
     if (pbLearnings.length > 0) {
       const existingKeys = new Set(

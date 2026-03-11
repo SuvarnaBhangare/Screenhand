@@ -399,24 +399,55 @@ Session 3+: After enough successful runs
   → job_create(playbookId=...) runs it fully automated
 ```
 
-### Available Playbooks
+### Directory Structure
 
-| Platform | File | Has steps[] | Has selectors/flows/errors |
-|----------|------|:-----------:|:--------------------------:|
-| Figma | `playbooks/figma.json` | No | Yes (131 successes, battle-tested) |
-| X/Twitter | `playbooks/x-twitter.json` | No | Yes |
-| Instagram | `playbooks/instagram.json` | No | Yes |
-| LinkedIn | `playbooks/linkedin.json` | No | Yes |
-| Threads | `playbooks/threads.json` | No | Yes |
-| Reddit | `playbooks/reddit.json` | No | Yes |
-| Discord | `playbooks/discord.json` | No | Yes |
-| Devpost | `playbooks/devpost.json` | No | Yes (flows + detection + captcha notes) |
-| Dev.to | `playbooks/devto.json` | No | Yes |
-| YouTube | `playbooks/youtube.json` | No | Yes |
-| n8n | `playbooks/n8n.json` | No | Yes |
-| Codex Desktop | `playbooks/codex-desktop.json` | No | Yes |
-| DaVinci Resolve | `playbooks/davinci-resolve-*.json` | **Yes** | No |
-| Canva | `playbooks/canva-smoke-test.json` | **Yes** | No |
+```
+references/          ← Curated knowledge (selectors, flows, errors, detection)
+  figma.json           Team-built, auto-injected by ContextTracker + memory seeds
+  x-twitter.json       Read via platform_guide() or auto-hints
+  instagram.json       ...
+  ...
+
+playbooks/           ← Executable only (steps[] with action objects)
+  x-twitter.json       Runnable via job_create(playbookId="x-twitter")
+  instagram.json       Stripped to just: id, steps, metadata
+  ...
+```
+
+### Available References (curated knowledge)
+
+| Platform | File | Contents |
+|----------|------|----------|
+| Figma | `references/figma.json` | Selectors, flows, detection, errors (131 successes) |
+| X/Twitter | `references/x-twitter.json` | Selectors, flows, errors, policy notes |
+| Instagram | `references/instagram.json` | Selectors, flows, errors, policy notes |
+| LinkedIn | `references/linkedin.json` | Selectors, flows, errors |
+| Threads | `references/threads.json` | Selectors, flows, errors |
+| Reddit | `references/reddit.json` | Selectors, flows, errors |
+| Discord | `references/discord.json` | Selectors, flows, errors |
+| Devpost | `references/devpost.json` | Flows, detection, errors (captcha notes) |
+| Dev.to | `references/devto.json` | Selectors, flows, errors |
+| YouTube | `references/youtube.json` | Selectors, flows, errors |
+| n8n | `references/n8n.json` | Selectors, flows, errors |
+| Codex Desktop | `references/codex-desktop.json` | Architecture, CDP, selectors |
+| DaVinci Resolve | `references/davinci-resolve-*.json` | Menu maps, shortcuts |
+| Canva | `references/canva-smoke-test.json` | Selectors with test results |
+| X (legacy) | `references/x_v1.json`, `references/twitter.json` | Older X reference data |
+
+### Available Executable Playbooks
+
+| Platform | File | Steps |
+|----------|------|-------|
+| X/Twitter | `playbooks/x-twitter.json` | 7 steps (navigate, extract, scroll) |
+| Instagram | `playbooks/instagram.json` | 7 steps |
+| LinkedIn | `playbooks/linkedin.json` | 6 steps |
+| Threads | `playbooks/threads.json` | 7 steps |
+| Reddit | `playbooks/reddit.json` | 6 steps |
+| Discord | `playbooks/discord.json` | 4 steps |
+| Dev.to | `playbooks/devto.json` | 6 steps |
+| YouTube | `playbooks/youtube.json` | 7 steps |
+| n8n | `playbooks/n8n.json` | 4 steps |
+| X change avatar | `playbooks/x_change_avatar.json` | Custom steps |
 
 ### How to use each type
 
@@ -513,7 +544,7 @@ Session 3+: After enough successful runs
 ```
 export_playbook(platform="twitter", domain="x.com", description="Twitter automation")
 ```
-Pulls URLs, selectors, errors, and strategies from memory → saves to `playbooks/twitter.json`.
+Pulls URLs, selectors, errors, and strategies from memory → saves to `references/twitter.json`.
 
 **Converting reference → executable:**
 To add executable steps to a reference playbook, either:
@@ -682,8 +713,10 @@ AFTER FINISHING (do these last!)
 
 | What | Where |
 |------|-------|
-| Playbooks | `playbooks/*.json` |
+| Reference knowledge | `references/*.json` — selectors, flows, errors, detection |
+| Executable playbooks | `playbooks/*.json` — steps[] only, runnable via job_create |
 | Context tracker | `src/context-tracker.ts` |
+| Playbook seeds | `src/memory/playbook-seeds.ts` — loads references into memory |
 | MCP server code | `mcp-desktop.ts` |
 | Native bridge (macOS) | `native/macos-bridge/` |
 | Memory storage | `~/.screenhand/memory/` |

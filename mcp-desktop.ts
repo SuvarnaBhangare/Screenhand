@@ -125,9 +125,12 @@ const LOCK_DIR = path.join(os.homedir(), ".screenhand", "locks");
 const leaseManager = new LeaseManager(LOCK_DIR);
 
 // ── Context tracker — connects tool execution to playbook knowledge ──
-const _playbookStoreForContext = new PlaybookStore(path.resolve(__dirname, "playbooks"));
+// References dir holds curated platform knowledge (selectors, flows, errors)
+// Playbooks dir holds only executable step sequences for job_create
+const referencesDir = path.resolve(__dirname, "references");
+const _playbookStoreForContext = new PlaybookStore(referencesDir);
 _playbookStoreForContext.load();
-const contextTracker = new ContextTracker(_playbookStoreForContext);
+const contextTracker = new ContextTracker(_playbookStoreForContext, path.resolve(__dirname, "playbooks"));
 
 // Skip logging for memory tools themselves
 const MEMORY_TOOLS = new Set([
@@ -982,14 +985,14 @@ server.tool("browser_human_click", "Click an element with realistic mouse events
 
 const playbooksDir = path.resolve(__dirname, "playbooks");
 
-server.tool("platform_guide", "Get automation guide for a platform (selectors, URLs, flows, error solutions). Available: devpost. Zero cost — only loads when called.", {
-  platform: z.string().describe("Platform name, e.g. 'devpost'"),
+server.tool("platform_guide", "Get automation guide for a platform (selectors, URLs, flows, error solutions). Reads from references/ (curated knowledge). Zero cost — only loads when called.", {
+  platform: z.string().describe("Platform name, e.g. 'figma', 'x-twitter', 'devpost'"),
   section: z.enum(["all", "urls", "flows", "selectors", "errors", "detection"]).optional().describe("Section to return (default: all). Use 'errors' for just error+solution pairs."),
 }, async ({ platform, section }) => {
-  const filePath = path.resolve(playbooksDir, `${platform.toLowerCase()}.json`);
+  const filePath = path.resolve(referencesDir, `${platform.toLowerCase()}.json`);
   if (!fs.existsSync(filePath)) {
-    const available = fs.existsSync(playbooksDir)
-      ? fs.readdirSync(playbooksDir).filter(f => f.endsWith(".json")).map(f => f.replace(".json", ""))
+    const available = fs.existsSync(referencesDir)
+      ? fs.readdirSync(referencesDir).filter(f => f.endsWith(".json")).map(f => f.replace(".json", ""))
       : [];
     return { content: [{ type: "text", text: `No playbook for "${platform}". Available: ${available.join(", ") || "none"}` }] };
   }
@@ -1054,13 +1057,14 @@ server.tool("playbook_preflight", "Quick feasibility check before automating a p
     return { content: [{ type: "text", text: `❌ Invalid URL: ${url}` }] };
   }
 
-  const playbook = _playbookStoreForContext.matchByDomain(domain);
-  if (playbook) {
-    good.push(`Found playbook: "${playbook.id}" (${playbook.successCount} successes, ${playbook.failCount} failures)`);
+  // Check references/ for curated knowledge
+  const reference = _playbookStoreForContext.matchByDomain(domain);
+  if (reference) {
+    good.push(`Found reference: "${reference.id}" (${reference.successCount} successes, ${reference.failCount} failures)`);
 
     // Check known errors
-    if (playbook.errors && playbook.errors.length > 0) {
-      for (const err of playbook.errors) {
+    if (reference.errors && reference.errors.length > 0) {
+      for (const err of reference.errors) {
         if (err.severity === "high") {
           issues.push(`🔴 ${err.error} → ${err.solution}`);
         } else {
@@ -1069,20 +1073,30 @@ server.tool("playbook_preflight", "Quick feasibility check before automating a p
       }
     }
 
-    // Check if playbook has executable steps
-    if (playbook.steps.length > 0) {
-      good.push(`Playbook has ${playbook.steps.length} executable steps — use job_create(playbookId="${playbook.id}") for auto-run`);
-    } else if (playbook.flows && Object.keys(playbook.flows).length > 0) {
-      warnings.push(`🟡 Playbook has flows but no executable steps — AI-guided execution available`);
+    // Check selector availability
+    if (reference.selectors) {
+      const selectorCount = Object.values(reference.selectors).reduce((sum, group) => sum + Object.keys(group).length, 0);
+      good.push(`${selectorCount} selectors documented in reference`);
     }
 
-    // Check selector availability
-    if (playbook.selectors) {
-      const selectorCount = Object.values(playbook.selectors).reduce((sum, group) => sum + Object.keys(group).length, 0);
-      good.push(`${selectorCount} selectors documented`);
+    if (reference.flows && Object.keys(reference.flows).length > 0) {
+      good.push(`${Object.keys(reference.flows).length} flows documented`);
     }
   } else {
     warnings.push(`🟡 No playbook exists for ${domain} — first-time automation, expect trial and error`);
+  }
+
+  // Check playbooks/ for executable steps
+  const execPlaybookPath = path.resolve(playbooksDir, `${reference?.id ?? domain.split(".")[0]}.json`);
+  if (fs.existsSync(execPlaybookPath)) {
+    try {
+      const execPb = JSON.parse(fs.readFileSync(execPlaybookPath, "utf-8"));
+      if (Array.isArray(execPb.steps) && execPb.steps.length > 0) {
+        good.push(`Executable playbook found: ${execPb.steps.length} steps — use job_create(playbookId="${execPb.id}") for auto-run`);
+      }
+    } catch { /* skip */ }
+  } else if (reference) {
+    warnings.push(`🟡 Reference exists but no executable playbook — manual execution needed`);
   }
 
   // 2. Scan the page if we have CDP access
@@ -1307,17 +1321,17 @@ server.tool("export_playbook", "Generate a playbook JSON from your session. Extr
     },
   };
 
-  // 4. Save to playbooks dir
-  const outPath = path.resolve(playbooksDir, `${platform.toLowerCase()}.json`);
+  // 4. Save to references dir (curated knowledge, not executable steps)
+  const outPath = path.resolve(referencesDir, `${platform.toLowerCase()}.json`);
   const exists = fs.existsSync(outPath);
 
-  if (!fs.existsSync(playbooksDir)) fs.mkdirSync(playbooksDir, { recursive: true });
+  if (!fs.existsSync(referencesDir)) fs.mkdirSync(referencesDir, { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(playbook, null, 2));
 
   return {
     content: [{
       type: "text",
-      text: `${exists ? "Updated" : "Created"} playbook: playbooks/${platform.toLowerCase()}.json\n\n` +
+      text: `${exists ? "Updated" : "Created"} reference: references/${platform.toLowerCase()}.json\n\n` +
         `URLs found: ${urlSet.size}\n` +
         `Selectors found: ${Object.keys(pageSelectors).length}\n` +
         `Errors documented: ${domainErrors.length}\n` +

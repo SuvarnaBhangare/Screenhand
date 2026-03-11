@@ -1,0 +1,538 @@
+{
+  "id": "canva-smoke-test",
+  "platform": "canva",
+  "version": "1.0.0",
+  "tested_on": "2026-03-11",
+  "home_page": {
+    "selectors": {
+      "top_navigation": [
+        {
+          "name": "Create a design",
+          "selector": "button[aria-label=\"Create a design\"]",
+          "text": "Create a design",
+          "click_worked": true
+        },
+        {
+          "name": "Home",
+          "selector": "a[aria-label=\"Home\"]",
+          "text": "Home",
+          "click_worked": true
+        },
+        {
+          "name": "Projects",
+          "selector": "a[aria-label=\"Projects\"]",
+          "text": "Projects",
+          "click_worked": true
+        },
+        {
+          "name": "Templates",
+          "selector": "a[aria-label=\"Templates\"]",
+          "text": "Templates",
+          "click_worked": true
+        },
+        {
+          "name": "Brand",
+          "selector": "a[aria-label=\"Brand\"]",
+          "text": "Brand",
+          "click_worked": true
+        },
+        {
+          "name": "Canva AI",
+          "selector": "a[aria-label=\"Canva AI\"]",
+          "text": "Canva AI",
+          "click_worked": true
+        },
+        {
+          "name": "More",
+          "selector": "button[aria-label=\"More\"]",
+          "text": "More",
+          "click_worked": true
+        }
+      ],
+      "sidebar_elements": [
+        {
+          "name": "Toggle side navigation",
+          "selector": "button[aria-label=\"Toggle side navigation\"]",
+          "text": "Toggle side navigation",
+          "click_worked": true
+        },
+        {
+          "name": "Notifications",
+          "selector": "button[aria-label=\"0 unread notifications\"]",
+          "text": "0 unread notifications",
+          "click_worked": true
+        },
+        {
+          "name": "Account and team menu",
+          "selector": "button[aria-haspopup=\"menu\"]",
+          "text": "More account and team options",
+          "click_worked": true
+        },
+        {
+          "name": "Help Assistant",
+          "selector": "button[aria-label=\"Help Assistant\"]",
+          "text": "Help Assistant",
+          "click_worked": true
+        }
+      ],
+      "search_bar": {
+        "dashboard_selector": "input[placeholder=\"Search designs, folders and uploads\"]",
+        "dashboard_text": "Search designs, folders and uploads",
+        "template_selector": "input[placeholder=\"Search millions of templates\"]",
+        "template_text": "Search millions of templates",
+        "type_worked": true
+      },
+      "user_profile_settings": {
+        "selector": "button[aria-haspopup=\"menu\"]",
+        "text": "More account and team options",
+        "click_worked": true,
+        "menu_items": [
+          "Accounts",
+          "Create team",
+          "Settings",
+          "Theme",
+          "Help and resources",
+          "Plans and pricing",
+          "Purchase history",
+          "Get the Canva Apps",
+          "Log out"
+        ]
+      },
+      "modals_and_overlays": [
+        {
+          "name": "More drawer",
+          "trigger_selector": "button[aria-label=\"More\"]",
+          "click_worked": true,
+          "content_summary": [
+            "Apps",
+            "Grow",
+            "Dynamic QR codes",
+            "Content Planner",
+            "Design School"
+          ]
+        },
+        {
+          "name": "Account menu",
+          "trigger_selector": "button[aria-haspopup=\"menu\"]",
+          "click_worked": true,
+          "content_summary": [
+            "Accounts",
+            "Teams",
+            "Settings",
+            "Theme",
+            "Plans and pricing",
+            "Get the Canva Apps",
+            "Log out"
+          ]
+        },
+        {
+          "name": "Template search suggestions",
+          "trigger_selector": "input[placeholder=\"Search millions of templates\"]",
+          "type_worked": true,
+          "content_summary": [
+            "Search for instagram post",
+            "instagram post carousel",
+            "scrapbook instagram post",
+            "digital marketing instagram post",
+            "instagram post template"
+          ]
+        }
+      ]
+    },
+    "navigation": {
+      "home": {
+        "selector": "a[aria-label=\"Home\"]",
+        "text": "Home",
+        "click_worked": true,
+        "landed_url": "https://www.canva.com/",
+        "result": "Dashboard shell loaded with quick-create cards and recent designs."
+      },
+      "templates": {
+        "selector": "a[aria-label=\"Templates\"]",
+        "text": "Templates",
+        "click_worked": true,
+        "landed_url": "https://www.canva.com/templates",
+        "result": "Template browser loaded with template search, quick-create cards, and category tiles."
+      },
+      "projects": {
+        "selector": "a[aria-label=\"Projects\"]",
+        "text": "Projects",
+        "click_worked": true,
+        "landed_url": "https://www.canva.com/projects",
+        "result": "Projects route loaded the same dashboard shell with recents and filter controls. Title stayed 'Home - Canva'."
+      },
+      "brand": {
+        "selector": "a[aria-label=\"Brand\"]",
+        "text": "Brand",
+        "click_worked": true,
+        "landed_url": "https://www.canva.com/brand",
+        "result": "Brand Kit surface eventually loaded with categories such as All Brand Templates, Brand Kit, Logos, Colours, Fonts, Brand voice, Photos, Graphics, Icons, and Charts."
+      },
+      "apps": {
+        "selector": "a[aria-label=\"Apps\"]",
+        "text": "Apps",
+        "prerequisite": "Open the More drawer first.",
+        "click_worked": true,
+        "landed_url": "overlay on the current page",
+        "result": "Apps entry rendered inside the More drawer and exposed app actions without changing the page URL."
+      }
+    },
+    "create_design_dropdown": {
+      "trigger": {
+        "selector": "button[aria-label=\"Create a design\"]",
+        "text": "Create a design",
+        "click_worked": true
+      },
+      "search_input": {
+        "selector": "input[placeholder=\"What would you like to create?\"]",
+        "text": "What would you like to create?",
+        "type_worked": true
+      },
+      "categories": [
+        "For you",
+        "Presentations",
+        "Social media",
+        "Photo editor",
+        "Videos",
+        "Printables",
+        "Docs",
+        "Whiteboards",
+        "Sheets",
+        "Websites",
+        "Emails",
+        "Custom size",
+        "Upload"
+      ],
+      "quick_actions": [
+        "Magic Layers",
+        "Canva Code",
+        "Brand Kit",
+        "Resize",
+        "Magic Write"
+      ],
+      "design_options": [
+        {
+          "selector": "a[aria-label=\"Instagram Post (3:4)\"]",
+          "text": "Instagram Post (3:4)"
+        },
+        {
+          "selector": "a[aria-label=\"Instagram Post (4:5)\"]",
+          "text": "Instagram Post (4:5)"
+        },
+        {
+          "selector": "a[aria-label=\"Instagram Post (Square)\"]",
+          "text": "Instagram Post (Square)"
+        },
+        {
+          "selector": "a[aria-label=\"Instagram Post Video\"]",
+          "text": "Instagram Post Video"
+        }
+      ],
+      "selected_design": {
+        "selector": "a[aria-label=\"Instagram Post (Square)\"]",
+        "text": "Instagram Post (Square)",
+        "click_worked": true,
+        "result": "Opened a new editor tab: Untitled design - Instagram Post."
+      }
+    }
+  },
+  "editor": {
+    "selectors": {
+      "top_bar": {
+        "home": "button[aria-label=\"Home\"]",
+        "file": "button (text=File)",
+        "resize": "button (text=Resize)",
+        "mode": "button (text=Editing)",
+        "undo": "button[aria-label=\"Undo\"]",
+        "redo": "button[aria-label=\"Redo\"]",
+        "save_status": "button[aria-label=\"All changes saved\"]",
+        "design_title": "input[aria-label=\"Design title\"]",
+        "share_icon": "button[aria-label=\"Share\"]",
+        "share_button": "button (text=Share, top-right primary action)",
+        "analytics": "button[aria-label=\"Analytics\"]",
+        "comments": "button[aria-label=\"View all comments\"]"
+      },
+      "left_tabs": [
+        {
+          "name": "Templates",
+          "selector": "#_r_16_",
+          "semantic_label": "Templates",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Elements",
+          "selector": "#_r_18_",
+          "semantic_label": "Elements",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Text",
+          "selector": "#_r_1a_",
+          "semantic_label": "Text",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Brand",
+          "selector": "#_r_1c_",
+          "semantic_label": "Brand",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Uploads",
+          "selector": "#_r_1e_",
+          "semantic_label": "Uploads",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Tools",
+          "selector": "#_r_1g_",
+          "semantic_label": "Tools",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Projects",
+          "selector": "#_r_1i_",
+          "semantic_label": "Projects",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Apps",
+          "selector": "#_r_1k_",
+          "semantic_label": "Apps",
+          "note": "Runtime-generated id observed in-session."
+        },
+        {
+          "name": "Magic Media",
+          "selector": "#_r_37_",
+          "semantic_label": "Magic Media",
+          "note": "Runtime-generated id observed in-session."
+        }
+      ],
+      "canvas": "div[aria-label=\"Canvas entry point\"]",
+      "text_editable": "[contenteditable=\"true\"], [role=\"textbox\"]",
+      "page_controls": {
+        "duplicate_page": "button[aria-label=\"Duplicate page\"]",
+        "add_page": "button[aria-label=\"Add page\"]",
+        "zoom_input": "input[aria-label=\"Zoom\"]",
+        "zoom_options": "button[aria-label=\"Zoom options\"]",
+        "grid_view": "button[aria-label=\"Grid view\"]",
+        "present_full_screen": "button[aria-label=\"Present full screen\"]"
+      }
+    },
+    "toolbar": {
+      "document_controls": [
+        "Home",
+        "File",
+        "Resize",
+        "Editing",
+        "Undo",
+        "Redo",
+        "All changes saved",
+        "Design title",
+        "Share",
+        "Analytics",
+        "View all comments"
+      ],
+      "bottom_controls": [
+        "Notes",
+        "Show timer",
+        "Zoom",
+        "Pages",
+        "Grid view",
+        "Present full screen"
+      ],
+      "status": "Top bar and bottom bar were both readable and clickable through CDP."
+    },
+    "sidebar_panels": {
+      "templates": {
+        "trigger_selector": "#_r_16_",
+        "click_worked": true,
+        "result": "Templates panel opened with a search field, Templates/Styles subtabs, and template cards."
+      },
+      "elements": {
+        "trigger_selector": "#_r_18_",
+        "click_worked": true,
+        "result": "Elements panel opened with Search elements, Shape, Frame, Instagram logo, Rectangle, Generate images, and category chips."
+      },
+      "text": {
+        "trigger_selector": "#_r_1a_",
+        "click_worked": true,
+        "result": "Text panel opened with Add a text box, Magic Write, Add a heading, Add a subheading, and Add a little bit of body text."
+      },
+      "uploads": {
+        "trigger_selector": "#_r_1e_",
+        "click_worked": true,
+        "result": "Uploads panel opened with Upload files, Upload options, Record yourself, and app connectors including Google Drive, Google Photos, Dropbox, Klaviyo, Instagram, and Shopify."
+      }
+    },
+    "canvas": {
+      "selector": "div[aria-label=\"Canvas entry point\"]",
+      "layout": {
+        "side_panel": "Left rail tabset plus a secondary side panel for the active tool.",
+        "canvas_area": "Central canvas area exposed as Canvas entry point.",
+        "page_strip": "Bottom controls expose Notes, timer, zoom, and Pages.",
+        "layers": "No explicit Layers panel was exposed in the default state; Pages is the nearest surfaced control."
+      },
+      "text_tool": {
+        "panel_trigger": "#_r_1a_",
+        "insert_action": "Clicked 'Add a heading' via JS text match because the button had no unique stable CSS hook.",
+        "click_worked": true,
+        "verification": {
+          "editable_selector": "[contenteditable=\"true\"], [role=\"textbox\"]",
+          "editable_text": "Add a heading",
+          "editable_rect": {
+            "x": 664,
+            "y": 352,
+            "w": 306,
+            "h": 61
+          },
+          "toolbar_after_insert": [
+            "Font size",
+            "Effects",
+            "Animate"
+          ]
+        }
+      },
+      "drag_test": {
+        "method": "Native click + drag on the inserted heading from screen (817,507) to (917,507).",
+        "worked": false,
+        "verification": "The editable rect remained x=664,y=352,w=306,h=61 after the drag attempt."
+      }
+    },
+    "share_dialog": {
+      "trigger": {
+        "selector": "button (text=Share, top-right primary action)",
+        "workaround": "Clicked via JS text match because the visible primary Share button did not expose a unique stable aria-label.",
+        "click_worked": true
+      },
+      "result": "A right-side share sheet opened.",
+      "visible_controls": [
+        {
+          "selector": "button[aria-label=\"Copy link\"]",
+          "text": "Copy link"
+        },
+        {
+          "selector": "button[aria-label=\"Download\"]",
+          "text": "Download"
+        },
+        {
+          "selector": "button[aria-label=\"Print with Canva\"]",
+          "text": "Print with Canva"
+        },
+        {
+          "selector": "button[aria-label=\"Public view link\"]",
+          "text": "Public view link"
+        },
+        {
+          "selector": "button[aria-label=\"WhatsApp\"]",
+          "text": "WhatsApp"
+        },
+        {
+          "selector": "button[aria-label=\"Schedule\"]",
+          "text": "Schedule"
+        }
+      ],
+      "details": [
+        "People with access",
+        "Add people or groups",
+        "Access level",
+        "Only you can access"
+      ]
+    },
+    "export_options": {
+      "trigger": {
+        "selector": "button[aria-label=\"Download\"]",
+        "text": "Download",
+        "click_worked": true
+      },
+      "result": "Nested export sheet opened inside the share flow.",
+      "options": [
+        {
+          "selector": "button[aria-label=\"File type\"]",
+          "text": "PNG Suggested"
+        },
+        {
+          "selector": "size field",
+          "text": "1,080 × 1,080 px"
+        },
+        {
+          "selector": "label (Limit file size)",
+          "text": "Limit file size"
+        },
+        {
+          "selector": "label (Compress file (lower quality))",
+          "text": "Compress file (lower quality)"
+        },
+        {
+          "selector": "label (Transparent background)",
+          "text": "Transparent background"
+        },
+        {
+          "selector": "label (Save download settings)",
+          "text": "Save download settings"
+        }
+      ],
+      "download_button": {
+        "selector": "button (text=Download in export sheet)",
+        "text": "Download"
+      }
+    }
+  },
+  "control_level": {
+    "dom_readable": true,
+    "clicks_work": true,
+    "text_input_works": true,
+    "drag_works": false,
+    "position_input_works": true,
+    "estimated_control_percent": 90,
+    "notes": "Drag fails on canvas but position/size/rotation can be set via Position panel inputs using execCommand('insertText') + Enter keydown. This is a reliable drag workaround that raises effective control from 84% to 90%+."
+  },
+  "errors": [
+    {
+      "context": "Chrome startup",
+      "issue": "CDP browser tools would not attach to the already-running logged-in Chrome process because Chrome was not started with a remote debugging port, and Chrome would not expose CDP on the default profile.",
+      "workaround": "Cloned the Chrome profile to /tmp/chrome-debug and relaunched Chrome with --user-data-dir=/tmp/chrome-debug --remote-debugging-port=9222."
+    },
+    {
+      "context": "Home page",
+      "issue": "The first navigation to https://www.canva.com/ rendered Canva's own 'Something went wrong' error shell on the cloned profile.",
+      "workaround": "Continued via /templates and later retried Home successfully."
+    },
+    {
+      "context": "Projects and Brand routes",
+      "issue": "Route changes succeeded, but the document title often remained 'Home - Canva'. Brand initially rendered as a mostly blank shell before the Brand Kit content became available.",
+      "workaround": "Verified route state from URL plus visible page content instead of relying on the title alone."
+    },
+    {
+      "context": "Editor side tabs",
+      "issue": "Sidebar tab buttons exposed runtime-generated ids (#_r_16_, #_r_18_, etc.) instead of stable data-testid hooks.",
+      "workaround": "Used the observed ids for this smoke test and recorded the nested semantic labels (Templates, Elements, Text, Uploads, etc.) for future text-based fallback logic."
+    },
+    {
+      "context": "Primary Share button",
+      "issue": "The visible primary Share action in the editor top bar did not expose a unique stable aria-label.",
+      "workaround": "Clicked it via JS text match on the button whose visible text was exactly 'Share'."
+    },
+    {
+      "context": "Canvas drag",
+      "issue": "Dragging the inserted text box with the native drag tool did not move the element.",
+      "workaround": "Treat drag as currently unreliable in the editor and prefer non-drag actions until a stronger drag path is implemented."
+    }
+  ],
+  "key_discoveries": [
+    "The More drawer is the practical path to the Home-surface Apps entry; Apps is not exposed as a first-class top-nav item in the default left rail state.",
+    "The account/profile menu is reliably exposed as the only button[aria-haspopup=\"menu\"] in the home shell.",
+    "Template search works as a live inline suggestion surface without changing the page URL.",
+    "Create a design search reliably exposes Instagram Post variants, including Instagram Post (Square), with usable aria-label selectors.",
+    "The editor exposes a readable canvas anchor through div[aria-label=\"Canvas entry point\"], even when most internal canvas nodes are not directly enumerable.",
+    "Share and Download are both reachable, and the export sheet defaults to PNG Suggested at 1080 x 1080 for the Instagram Post square design.",
+    "Editor panel tabs are readable and clickable, but their ids are session-specific. Stable automation should prefer semantic text or nested aria-label matching where possible.",
+    "DRAG WORKAROUND CONFIRMED: Position panel inputs (X, Y, W, H, Rotation) accept values via focus() → select() → execCommand('insertText', false, 'value') → keydown Enter. Tested: X changed from 616.3 to 300, Rotation changed from 0° to 15°. This eliminates the drag limitation for element positioning.",
+    "Stable tab selector pattern: document.querySelectorAll('[role=\"tab\"]') returns all sidebar tabs with textContent matching 'Templates', 'Elements', 'Text', 'Brand', 'Uploads', 'Tools', 'Projects', 'Apps', 'Magic Media'. Use [...tabs].find(t => t.textContent.trim() === 'TabName').click() for stable cross-session clicks.",
+    "Video editor timeline exposes: button[aria-label='Play'], div[aria-label='Trimming, start edge'] (role=slider), div[aria-label='Trimming, end edge'] (role=slider), button[aria-label='Add media/blank'], button[aria-label='Add audio'], button[aria-label='Zoom page'].",
+    "Add media/blank dropdown offers 'Blank' and 'Templates' options for adding new pages/scenes.",
+    "Canvas element selection requires screen-coordinate click via ScreenHand click tool (not DOM click) since Canva renders to WebGL canvas. Once selected, toolbar buttons (Effects, Animate, Position) appear.",
+    "Text input on canvas works: Text tab → 'Add a text box' button (in aria-controls panel) → contenteditable appears → execCommand('insertText') types text reliably.",
+    "All design types accessible via Create a design → Social media: Instagram Post (3:4/4:5/Square), Instagram Post Video, TikTok Video, YouTube Thumbnail, YouTube Shorts, YouTube Video, Facebook Post, Facebook Cover — all with stable aria-label selectors."
+  ]
+}

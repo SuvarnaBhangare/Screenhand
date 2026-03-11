@@ -91,7 +91,7 @@ export class MemoryStore {
 
     // Seed errors from playbooks — merge curated platform knowledge into memory.
     // Uses pb_err_ prefix IDs so we can identify and refresh them on each boot.
-    const playbooksDir = path.join(this.baseDir, "playbooks");
+    const playbooksDir = path.join(this.baseDir, "references");
     const pbErrors = seedErrorsFromPlaybooks(playbooksDir);
     if (pbErrors.length > 0) {
       // Remove stale playbook-seeded errors (they'll be re-added with fresh data)
