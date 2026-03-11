@@ -27,11 +27,25 @@
 import type { AutomationRuntimeService } from "../runtime/service.js";
 import type { Playbook, PlaybookStep, PlaybookRunResult } from "./types.js";
 
+/** CDP client interface — matches what JobRunner already provides */
+export interface CDPConnection {
+  Runtime: { evaluate: (params: { expression: string; awaitPromise?: boolean; returnByValue?: boolean }) => Promise<any> };
+  Input: { dispatchKeyEvent: (params: Record<string, unknown>) => Promise<any> };
+  close: () => Promise<void>;
+}
+
 const DEFAULT_VERIFY_TIMEOUT = 5000;
 const STEP_DELAY_MS = 300;
 
 export class PlaybookEngine {
+  private cdpConnect?: (port?: number) => Promise<CDPConnection>;
+
   constructor(private readonly runtime: AutomationRuntimeService) {}
+
+  /** Set CDP connection factory for browser_js and cdp_key_event actions. Factory accepts optional port override. */
+  setCDPConnect(factory: (port?: number) => Promise<CDPConnection>): void {
+    this.cdpConnect = factory;
+  }
 
   /**
    * Execute a playbook against a live session.
@@ -40,16 +54,16 @@ export class PlaybookEngine {
   async run(
     sessionId: string,
     playbook: Playbook,
-    options: { onStep?: (index: number, step: PlaybookStep, result: string) => void } = {},
+    options: { vars?: Record<string, string>; onStep?: (index: number, step: PlaybookStep, result: string) => void } = {},
   ): Promise<PlaybookRunResult> {
     const start = Date.now();
     let stepsCompleted = 0;
 
     for (let i = 0; i < playbook.steps.length; i++) {
-      const step = playbook.steps[i]!;
+      const step = options.vars ? this.substituteVars(playbook.steps[i]!, options.vars) : playbook.steps[i]!;
 
       try {
-        const result = await this.executeStep(sessionId, step);
+        const result = await this.executeStep(sessionId, step, playbook.cdpPort);
         stepsCompleted++;
 
         if (options.onStep) {
@@ -108,7 +122,7 @@ export class PlaybookEngine {
   /**
    * Execute a single playbook step.
    */
-  private async executeStep(sessionId: string, step: PlaybookStep): Promise<string> {
+  private async executeStep(sessionId: string, step: PlaybookStep, cdpPort?: number): Promise<string> {
     const target = this.resolveTarget(step.target);
 
     switch (step.action) {
@@ -174,9 +188,64 @@ export class PlaybookEngine {
         return `Screenshot taken`;
       }
 
+      case "browser_js": {
+        if (!step.code) throw new Error("browser_js step missing code");
+        if (!this.cdpConnect) throw new Error("browser_js requires CDP — call setCDPConnect() first");
+        const client = await this.cdpConnect(cdpPort);
+        try {
+          const result = await client.Runtime.evaluate({
+            expression: step.code,
+            awaitPromise: true,
+            returnByValue: true,
+          });
+          if (result.exceptionDetails) {
+            throw new Error(`JS Error: ${result.exceptionDetails.text ?? result.exceptionDetails.exception?.description ?? "unknown"}`);
+          }
+          const val = result.result?.value;
+          return `browser_js: ${typeof val === "object" ? JSON.stringify(val) : String(val ?? "undefined")}`;
+        } finally {
+          await client.close();
+        }
+      }
+
+      case "cdp_key_event": {
+        if (!step.keyEvent) throw new Error("cdp_key_event step missing keyEvent");
+        if (!this.cdpConnect) throw new Error("cdp_key_event requires CDP — call setCDPConnect() first");
+        const client = await this.cdpConnect(cdpPort);
+        try {
+          const { key, code, modifiers, windowsVirtualKeyCode } = step.keyEvent;
+          const baseParams = { key, code, modifiers: modifiers ?? 0, windowsVirtualKeyCode: windowsVirtualKeyCode ?? 0, nativeVirtualKeyCode: windowsVirtualKeyCode ?? 0 };
+          await client.Input.dispatchKeyEvent({ type: "keyDown", ...baseParams });
+          await client.Input.dispatchKeyEvent({ type: "keyUp", ...baseParams });
+          return `cdp_key_event: ${modifiers ? `mod${modifiers}+` : ""}${key}`;
+        } finally {
+          await client.close();
+        }
+      }
+
       default:
         throw new Error(`Unknown action: ${step.action}`);
     }
+  }
+
+  /**
+   * Substitute {VAR_NAME} placeholders in step string fields with actual values.
+   */
+  private substituteVars(step: PlaybookStep, vars: Record<string, string>): PlaybookStep {
+    const sub = (s: string): string => {
+      let result = s;
+      for (const [key, val] of Object.entries(vars)) {
+        result = result.replaceAll(`{${key}}`, val);
+      }
+      return result;
+    };
+    const result = { ...step };
+    if (result.code) result.code = sub(result.code);
+    if (result.text) result.text = sub(result.text);
+    if (result.url) result.url = sub(result.url);
+    if (result.description) result.description = sub(result.description);
+    if (result.verify) result.verify = sub(result.verify);
+    return result;
   }
 
   /**

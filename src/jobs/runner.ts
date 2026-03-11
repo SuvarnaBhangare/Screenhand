@@ -228,11 +228,12 @@ export class JobRunner {
     let stepsCompleted = 0;
 
     const result = await engine.run(engineSessionId, remainingPlaybook, {
+      ...(job.vars ? { vars: job.vars } : {}),
       onStep: (i, step, res) => {
         const globalIdx = resumeIdx + i;
-        this.jobs.completeStep(job.id, globalIdx, { durationMs: 0 });
+        this.jobs.completeStep(job.id, globalIdx, { durationMs: 0, output: res });
         stepsCompleted++;
-        this.log(`  Step ${globalIdx}/${playbook.steps.length - 1}: ${step.description ?? step.action} → ${res}`);
+        this.log(`  Step ${globalIdx}/${playbook.steps.length - 1}: ${step.description ?? step.action} → ${res.substring(0, 200)}`);
       },
     });
 
@@ -525,6 +526,10 @@ export class JobRunner {
         case "read":
         case "extract":
           return await this.execRead(method, target, start, attempt);
+        case "browser_js":
+          return await this.execBrowserJs(step.description ?? "", start, attempt);
+        case "cdp_key_event":
+          return await this.execCdpKeyEvent(step.keys ?? "", start, attempt);
         default:
           // Try as a generic click on the target text
           if (target) return await this.execClick(method, target, start, attempt);
@@ -713,6 +718,49 @@ export class JobRunner {
       }
     }
     throw new Error(`Method ${method} does not support read`);
+  }
+
+  private async execBrowserJs(code: string, start: number, attempt: number): Promise<ActionResult> {
+    if (!this.config.cdpConnect) throw new Error("browser_js requires CDP");
+    const client = await this.config.cdpConnect();
+    try {
+      const result = await client.Runtime.evaluate({
+        expression: code,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      if (result.exceptionDetails) {
+        throw new Error(`JS Error: ${result.exceptionDetails.text ?? result.exceptionDetails.exception?.description ?? "unknown"}`);
+      }
+      return { ok: true, method: "cdp", durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target: String(result.result?.value ?? "") };
+    } finally {
+      await client.close();
+    }
+  }
+
+  private async execCdpKeyEvent(keys: string, start: number, attempt: number): Promise<ActionResult> {
+    if (!this.config.cdpConnect) throw new Error("cdp_key_event requires CDP");
+    const client = await this.config.cdpConnect();
+    try {
+      // Parse "mod4+Enter" format or raw key
+      const parts = keys.split("+").map(k => k.trim());
+      let modifiers = 0;
+      let key = parts[parts.length - 1] ?? "";
+      for (const p of parts.slice(0, -1)) {
+        if (p.startsWith("mod")) modifiers = parseInt(p.replace("mod", ""), 10) || 0;
+        if (p === "Meta" || p === "Cmd") modifiers = 4;
+        if (p === "Shift") modifiers |= 8;
+        if (p === "Ctrl") modifiers |= 2;
+        if (p === "Alt") modifiers |= 1;
+      }
+      const keyCode = key === "Enter" ? 13 : key === "Tab" ? 9 : key === "Escape" ? 27 : 0;
+      const baseParams = { key, code: key, modifiers, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
+      await client.Input.dispatchKeyEvent({ type: "keyDown", ...baseParams });
+      await client.Input.dispatchKeyEvent({ type: "keyUp", ...baseParams });
+      return { ok: true, method: "cdp", durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target: keys };
+    } finally {
+      await client.close();
+    }
   }
 
   // ── Blocker classification ──────────────────────

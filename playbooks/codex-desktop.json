@@ -1,0 +1,76 @@
+{
+  "id": "codex-desktop",
+  "name": "Codex Desktop — Full Prompt Cycle",
+  "description": "Full Codex automation cycle: new thread → submit prompt → wait for completion → read response. Supports follow-up prompts by repeating the submit+wait+read sequence.",
+  "platform": "codex-desktop",
+  "version": "2.0.0",
+  "urlPatterns": ["app://-/index.html*"],
+  "tags": ["codex", "openai", "desktop", "electron", "cdp"],
+  "cdpPort": 9333,
+  "successCount": 1,
+  "failCount": 0,
+  "preconditions": [
+    "!!document.querySelector('.ProseMirror')"
+  ],
+  "steps": [
+    {
+      "action": "wait",
+      "ms": 500,
+      "description": "Wait for Codex UI to settle"
+    },
+
+    {
+      "action": "browser_js",
+      "code": "document.querySelector('.ProseMirror').focus(); 'focused'",
+      "description": "Focus the ProseMirror editor"
+    },
+    {
+      "action": "browser_js",
+      "code": "var pm = document.querySelector('.ProseMirror'); pm.innerHTML = '<p><br></p>'; pm.focus(); 'cleared'",
+      "description": "Clear editor content"
+    },
+    {
+      "action": "wait",
+      "ms": 200,
+      "description": "Brief pause after clearing"
+    },
+    {
+      "action": "browser_js",
+      "code": "document.querySelector('.ProseMirror').focus(); document.execCommand('insertText', false, '{PROMPT_TEXT}'); 'typed'",
+      "description": "Type prompt text via execCommand (ProseMirror-compatible)"
+    },
+    {
+      "action": "wait",
+      "ms": 300,
+      "description": "Wait for ProseMirror to process input"
+    },
+    {
+      "action": "cdp_key_event",
+      "keyEvent": {
+        "key": "Enter",
+        "code": "Enter",
+        "modifiers": 4,
+        "windowsVirtualKeyCode": 13
+      },
+      "description": "Submit with Cmd+Enter"
+    },
+
+    {
+      "action": "browser_js",
+      "code": "(() => { const start = Date.now(); const poll = () => { const body = document.body.innerText; if (body.includes('Ask for follow-up changes') || body.includes('Hand off') || body.includes('Worked for')) return 'done'; if (Date.now() - start > 120000) return 'timeout_120s'; return null; }; return new Promise(resolve => { const check = () => { const r = poll(); if (r) resolve(r); else setTimeout(check, 2000); }; check(); }); })()",
+      "description": "Wait for Codex to finish (polls for 'Ask for follow-up changes' or 'Hand off', max 120s)"
+    },
+
+    {
+      "action": "browser_js",
+      "code": "(() => { const msgs = document.querySelectorAll('[class*=message], [class*=thread], [class*=content]'); let text = ''; for (const m of msgs) { text += m.textContent + '\\n'; } if (text.trim().length > 0) return text.substring(0, 4000); return document.body.innerText.substring(0, 4000); })()",
+      "description": "Read Codex response from the thread"
+    },
+
+    {
+      "action": "screenshot",
+      "description": "Capture final state",
+      "optional": true
+    }
+  ]
+}

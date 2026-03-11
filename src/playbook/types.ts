@@ -21,7 +21,7 @@
 
 export interface PlaybookStep {
   /** Action to perform */
-  action: "navigate" | "press" | "type_into" | "extract" | "key_combo" | "scroll" | "wait" | "screenshot";
+  action: "navigate" | "press" | "type_into" | "extract" | "key_combo" | "scroll" | "wait" | "screenshot" | "browser_js" | "cdp_key_event";
   /** Target — CSS selector, text, or {x,y} */
   target?: string | { selector: string } | { x: number; y: number };
   /** Text to type (for type_into) */
@@ -44,6 +44,15 @@ export interface PlaybookStep {
   verifyTimeoutMs?: number;
   /** Extract format */
   format?: "text" | "json" | "table";
+  /** JavaScript code to evaluate in browser (for browser_js) */
+  code?: string;
+  /** CDP key event params (for cdp_key_event) */
+  keyEvent?: {
+    key: string;
+    code: string;
+    modifiers?: number;
+    windowsVirtualKeyCode?: number;
+  };
   /** If true, failure of this step is non-fatal — continue to next */
   optional?: boolean;
 }
@@ -75,6 +84,8 @@ export interface Playbook {
   platform: string;
   /** URL patterns where this playbook applies */
   urlPatterns?: string[];
+  /** CDP port override for this playbook (e.g. 9333 for Codex desktop) */
+  cdpPort?: number;
   /** Detection expressions — JS that returns boolean to check if we're in the right state */
   preconditions?: string[];
   /** Ordered steps to execute */

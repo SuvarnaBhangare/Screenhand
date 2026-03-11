@@ -62,6 +62,9 @@ export class JobManager {
     sessionId?: string;
     bundleId?: string;
     windowId?: number;
+    chainId?: string;
+    dependsOn?: string;
+    vars?: Record<string, string>;
   }): Job {
     const now = new Date().toISOString();
     const id = "job_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -98,8 +101,44 @@ export class JobManager {
       completedAt: null,
     };
 
+    if (opts.chainId) job.chainId = opts.chainId;
+    if (opts.dependsOn) job.dependsOn = opts.dependsOn;
+    if (opts.vars) job.vars = opts.vars;
+
     this.store.add(job);
     return job;
+  }
+
+  /**
+   * Create a chain of linked jobs. Returns all created jobs.
+   * Each job depends on the previous one. Variables from prior job outputs
+   * are automatically passed forward using {jobId.outputKey} syntax.
+   */
+  createChain(opts: {
+    chainId?: string;
+    jobs: Array<{
+      task: string;
+      playbookId?: string;
+      vars?: Record<string, string>;
+      bundleId?: string;
+      tags?: string[];
+    }>;
+  }): Job[] {
+    const chainId = opts.chainId ?? "chain_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    const created: Job[] = [];
+    let prevId: string | undefined;
+
+    for (const jobOpts of opts.jobs) {
+      const job = this.create({
+        ...jobOpts,
+        chainId,
+        ...(prevId ? { dependsOn: prevId } : {}),
+      });
+      created.push(job);
+      prevId = job.id;
+    }
+
+    return created;
   }
 
   // ── State transitions ───────────────────────────
@@ -155,8 +194,8 @@ export class JobManager {
 
   // ── Step tracking ───────────────────────────────
 
-  /** Mark a step as completed and advance lastStep. */
-  completeStep(jobId: string, stepIndex: number, opts?: { durationMs?: number }): Job | { error: string } {
+  /** Mark a step as completed and advance lastStep. Optionally capture output. */
+  completeStep(jobId: string, stepIndex: number, opts?: { durationMs?: number; output?: string }): Job | { error: string } {
     const job = this.store.get(jobId);
     if (!job) return { error: `Job ${jobId} not found` };
     if (job.state !== "running") return { error: `Job is not running (state=${job.state})` };
@@ -167,9 +206,22 @@ export class JobManager {
     step.status = "done";
     step.completedAt = new Date().toISOString();
     if (opts?.durationMs !== undefined) step.durationMs = opts.durationMs;
+    if (opts?.output !== undefined) step.output = opts.output;
 
-    const newLastStep = Math.max(job.lastStep, stepIndex);
-    return this.store.update(jobId, { lastStep: newLastStep, steps: job.steps }) ?? { error: "Update failed" };
+    // Also store in job-level outputs for cross-job variable passing
+    const patch: Partial<Job> = { lastStep: Math.max(job.lastStep, stepIndex), steps: job.steps };
+    if (opts?.output !== undefined) {
+      const outputs = job.outputs ?? {};
+      outputs[String(stepIndex)] = opts.output;
+      // Also store by step description if available (friendlier key)
+      if (step.description) {
+        const key = step.description.replace(/[^a-zA-Z0-9_]/g, "_").substring(0, 50);
+        outputs[key] = opts.output;
+      }
+      patch.outputs = outputs;
+    }
+
+    return this.store.update(jobId, patch) ?? { error: "Update failed" };
   }
 
   /** Mark a step as failed. Does NOT transition the job — caller decides (retry vs block vs fail). */
@@ -222,16 +274,37 @@ export class JobManager {
     return this.store.list(state);
   }
 
-  /** Pop the next queued job and transition it to running. */
+  /** Pop the next queued job and transition it to running. Skips jobs whose dependency isn't done yet. */
   dequeue(sessionId?: string): Job | null {
-    const next = this.store.nextQueued();
-    if (!next) return null;
+    const queued = this.store.list("queued")
+      .sort((a, b) => a.priority - b.priority || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-    const opts: { sessionId?: string } = {};
-    if (sessionId !== undefined) opts.sessionId = sessionId;
-    const result = this.transition(next.id, "running", opts);
-    if ("error" in result) return null;
-    return result;
+    for (const candidate of queued) {
+      // Check dependency — skip if dependent job isn't done
+      if (candidate.dependsOn) {
+        const dep = this.store.get(candidate.dependsOn);
+        if (!dep || dep.state !== "done") continue;
+
+        // Resolve variables from dependency outputs
+        if (dep.outputs && candidate.vars) {
+          for (const [key, val] of Object.entries(candidate.vars)) {
+            // {prev.outputKey} → look up from dependency's outputs
+            const match = val.match(/^\{prev\.(.+)\}$/);
+            if (match?.[1] && dep.outputs[match[1]]) {
+              candidate.vars[key] = dep.outputs[match[1]]!;
+            }
+          }
+          this.store.update(candidate.id, { vars: candidate.vars });
+        }
+      }
+
+      const opts: { sessionId?: string } = {};
+      if (sessionId !== undefined) opts.sessionId = sessionId;
+      const result = this.transition(candidate.id, "running", opts);
+      if (!("error" in result)) return result;
+    }
+
+    return null;
   }
 
   summary(): JobSummary {

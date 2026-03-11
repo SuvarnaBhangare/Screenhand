@@ -154,9 +154,11 @@ These control Chrome via CDP (Chrome DevTools Protocol). They work **in the back
 
 | Tool | What it does | When to use |
 |------|-------------|-------------|
-| `job_create` | Create a job, optionally with a playbookId for auto-execution | When a playbook with steps exists — **preferred over manual execution** |
+| `job_create` | Create a job, optionally with a playbookId for auto-execution. Supports `vars`, `dependsOn`, `chainId`. | When a playbook with steps exists — **preferred over manual execution** |
+| `job_create_chain` | Create multiple linked jobs that run sequentially, with automatic dependency wiring | When you need a multi-job pipeline (e.g. submit prompt, wait, read response) |
 | `job_run` | Execute a pending job | After job_create |
-| `job_status` | Check job progress | Monitor running jobs |
+| `job_run_all` | Execute all queued jobs (respects chain dependencies) | After job_create_chain |
+| `job_status` | Check job progress, step outputs, and chain/dependency info | Monitor running jobs |
 | `job_list` | List all jobs | See what's queued |
 
 ### Memory Tools (persist learnings)
@@ -448,6 +450,7 @@ playbooks/           ← Executable only (steps[] with action objects)
 | YouTube | `playbooks/youtube.json` | 7 steps |
 | n8n | `playbooks/n8n.json` | 4 steps |
 | X change avatar | `playbooks/x_change_avatar.json` | Custom steps |
+| Codex Desktop | `playbooks/codex-desktop.json` | 10 steps (CDP: browser_js, cdp_key_event, variable substitution) |
 
 ### How to use each type
 
@@ -490,7 +493,7 @@ playbooks/           ← Executable only (steps[] with action objects)
   "failCount": 0,
 
   "steps": [ ... ],          // EXECUTABLE: machine-runnable PlaybookStep objects
-                              // Actions: navigate, press, type_into, extract, key_combo, scroll, wait, screenshot
+                              // Actions: navigate, press, type_into, extract, key_combo, scroll, wait, screenshot, browser_js, cdp_key_event
 
   "selectors": {             // REFERENCE: CSS selectors grouped by UI area
     "toolbar": { "search": "[data-testid='search']", "menu": "[aria-label='Menu']" },
@@ -598,6 +601,146 @@ For most platforms, **direct URL navigation** is more reliable than typing in se
 browser_navigate → https://x.com/search?q=your+query&src=typed_query
 browser_navigate → https://www.instagram.com/explore/search/keyword/
 ```
+
+---
+
+## Job Chaining & Variable Substitution
+
+Jobs can be linked into sequential chains where each job waits for the previous one to finish. Combined with variable substitution and step output capture, this enables multi-stage automation pipelines.
+
+### Job Chaining
+
+Use `dependsOn` to make a job wait for another, and `chainId` to group related jobs:
+
+```
+job_create(task="Submit prompt", playbookId="codex-desktop", chainId="codex-flow-1",
+           vars={"PROMPT_TEXT": "Refactor the auth module"})
+  → returns job ID: j_abc
+
+job_create(task="Read response", playbookId="codex-reader", chainId="codex-flow-1",
+           dependsOn="j_abc",
+           vars={"RESPONSE_KEY": "{prev.Read_Codex_response}"})
+  → returns job ID: j_def (won't dequeue until j_abc is done)
+```
+
+Or use `job_create_chain` to wire everything in one call:
+
+```
+job_create_chain(jobs=[
+  { task: "Submit prompt to Codex", playbookId: "codex-desktop",
+    vars: { "PROMPT_TEXT": "Fix the login bug" } },
+  { task: "Read Codex response", playbookId: "codex-reader",
+    vars: { "RESPONSE_KEY": "{prev.Read_Codex_response}" } }
+])
+```
+
+This creates both jobs with a shared `chainId` and automatic `dependsOn` wiring. Run the chain with `job_run_all`.
+
+### Variable Substitution
+
+The `vars` field on `job_create` passes key-value pairs into playbook steps. Any `{KEY_NAME}` placeholder in step fields (`text`, `code`, `url`, `description`, `verify`) gets replaced at runtime:
+
+```json
+// Playbook step:
+{ "action": "browser_js", "code": "document.execCommand('insertText', false, '{PROMPT_TEXT}')" }
+
+// job_create call:
+job_create(playbookId="codex-desktop", vars={"PROMPT_TEXT": "Build a REST API"})
+
+// At runtime, step becomes:
+{ "action": "browser_js", "code": "document.execCommand('insertText', false, 'Build a REST API')" }
+```
+
+**Cross-job data passing** with `{prev.outputKey}`: when a job depends on another via `dependsOn`, its vars can reference the dependency's captured outputs. At dequeue time, `{prev.Read_Codex_response}` resolves to the matching output from the completed dependency.
+
+### Step Output Capture
+
+Every completed step saves its return value to `step.output`. These are also aggregated into `job.outputs` (keyed by step index and by a sanitized version of `step.description`). View them via `job_status`:
+
+```
+job_status(jobId="j_abc")
+→ Steps:
+  ✓ [0] Wait for Codex UI to settle
+  ✓ [1] Focus the ProseMirror editor
+      → browser_js: focused
+  ...
+  ✓ [8] Read Codex response from the thread
+      → browser_js: The auth module has been refactored...
+```
+
+The `job.outputs` map makes these values available for downstream jobs in a chain via `{prev.outputKey}`.
+
+---
+
+## New PlaybookStep Actions
+
+Two actions execute directly via Chrome DevTools Protocol (CDP), bypassing the native accessibility bridge entirely. They require the playbook engine to have a CDP connection (via `setCDPConnect`).
+
+### `browser_js` — Evaluate JavaScript in the browser
+
+Runs arbitrary JavaScript in the active browser tab via `Runtime.evaluate`. Supports async code (`awaitPromise: true`). The return value becomes the step's captured output.
+
+```json
+{
+  "action": "browser_js",
+  "code": "document.querySelector('.result').textContent",
+  "description": "Read the result element"
+}
+```
+
+### `cdp_key_event` — Dispatch key events via CDP
+
+Sends `Input.dispatchKeyEvent` (keyDown + keyUp) directly to the browser. Useful for keyboard shortcuts that don't work through OS-level key simulation (e.g. Cmd+Enter in Electron apps).
+
+```json
+{
+  "action": "cdp_key_event",
+  "keyEvent": { "key": "Enter", "code": "Enter", "modifiers": 4, "windowsVirtualKeyCode": 13 },
+  "description": "Submit with Cmd+Enter"
+}
+```
+
+Modifier values: `1` = Alt, `2` = Ctrl, `4` = Meta/Cmd, `8` = Shift. Combine with bitwise OR (e.g. `12` = Cmd+Shift).
+
+### `cdpPort` field on playbooks
+
+Playbooks targeting Electron apps (like Codex Desktop) can set `"cdpPort": 9333` at the top level. The engine passes this port to the CDP connection factory so it connects to the right debugging port instead of the default.
+
+---
+
+## Codex Desktop Playbook Example
+
+The `codex-desktop` playbook (`playbooks/codex-desktop.json`) demonstrates chaining, variable substitution, and CDP actions together. It automates a full Codex prompt cycle: focus editor, type prompt, submit, wait for completion, read response.
+
+### Key techniques used
+
+1. **`cdpPort: 9333`** — connects to Codex's Electron debugging port
+2. **`browser_js` steps** — interact with ProseMirror contenteditable (regular DOM clicks/types don't work)
+3. **`{PROMPT_TEXT}` variable** — injected via `vars` at job creation time
+4. **`cdp_key_event` with modifiers:4** — sends Cmd+Enter to submit the prompt
+5. **Polling wait** — a `browser_js` step with a Promise that polls every 2s for completion signals (max 120s)
+6. **Output capture** — the "Read Codex response" step returns thread text, saved to `job.outputs` for downstream jobs
+
+### Running a Codex chain
+
+```
+job_create_chain(jobs=[
+  { task: "Submit: Refactor auth module",
+    playbookId: "codex-desktop",
+    vars: { "PROMPT_TEXT": "Refactor the auth module to use JWT tokens" } },
+  { task: "Submit follow-up: Add tests",
+    playbookId: "codex-desktop",
+    vars: { "PROMPT_TEXT": "Now add unit tests for the refactored auth module" } }
+])
+→ Chain created: chain_xyz (2 jobs)
+  j_001: Submit: Refactor auth module (first)
+  j_002: Submit follow-up: Add tests (after j_001)
+
+job_run_all()
+→ Executes j_001 fully, then j_002
+```
+
+Each job in the chain runs the full playbook (clear editor, type prompt, submit, wait, read response) with its own `PROMPT_TEXT`.
 
 ---
 

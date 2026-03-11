@@ -49,6 +49,8 @@ export interface JobStep {
   error?: string;
   durationMs?: number;
   completedAt?: string;
+  /** Output captured from step execution (e.g. response text from browser_js) */
+  output?: string;
 }
 
 export interface Job {
@@ -84,6 +86,17 @@ export interface Job {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+
+  // ── Job chaining ──
+
+  /** Chain ID — groups linked jobs into a single flow */
+  chainId?: string;
+  /** Job ID this job depends on — won't dequeue until dependency is done */
+  dependsOn?: string;
+  /** Variables for template substitution in playbook steps (e.g. {PROMPT_TEXT} → actual text) */
+  vars?: Record<string, string>;
+  /** Captured outputs from completed steps — keyed by step index or name */
+  outputs?: Record<string, string>;
 }
 
 export interface JobSummary {

@@ -96,8 +96,8 @@ async function ensureCDP(): Promise<{ CDP: any; port: number }> {
   if (cdpPort) {
     try { await CDP.Version({ port: cdpPort }); return { CDP, port: cdpPort }; } catch {}
   }
-  // Try common ports
-  for (const p of [9222, 9223, 9224]) {
+  // Try common ports (9222-9224 = Chrome, 9333 = Codex desktop)
+  for (const p of [9222, 9223, 9224, 9333]) {
     try { await CDP.Version({ port: p }); cdpPort = p; return { CDP, port: p }; } catch {}
   }
   throw new Error("Chrome not running with --remote-debugging-port. Launch with: /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug");
@@ -2546,13 +2546,13 @@ originalTool("wait_for_state", "Wait until a condition is met on screen: text ap
 // JOBS — persistent multi-step automation with resume
 // ═══════════════════════════════════════════════
 
-originalTool("job_create", "Create a new automation job. Jobs persist across restarts and can be resumed from the last successful step.", {
+originalTool("job_create", "Create a new automation job. Jobs persist across restarts and can be resumed from the last successful step. Supports chaining: set dependsOn to wait for another job, and vars for template substitution (e.g. {PROMPT_TEXT}).", {
   task: z.string().describe("Human-readable description of what this job should do"),
   playbookId: z.string().optional().describe("Playbook ID to drive this job (optional — AI-only if omitted)"),
   bundleId: z.string().optional().describe("Target application bundle ID (e.g., 'com.apple.Safari'). Omit for app-agnostic jobs."),
   windowId: z.number().optional().describe("Target window ID within the application. Omit for app-agnostic jobs."),
   steps: z.array(z.object({
-    action: z.string().describe("Action name (e.g., navigate, click, type_text, screenshot, key)"),
+    action: z.string().describe("Action name (e.g., navigate, click, type_text, screenshot, key, browser_js, cdp_key_event)"),
     target: z.string().optional().describe("Target element or URL"),
     description: z.string().optional().describe("Human-readable description"),
     text: z.string().optional().describe("Text payload for type_text/type_into actions"),
@@ -2563,7 +2563,10 @@ originalTool("job_create", "Create a new automation job. Jobs persist across res
   priority: z.number().optional().describe("Priority (lower = higher priority, default: 10)"),
   maxRetries: z.number().optional().describe("Max retry attempts on failure (default: 3)"),
   sessionId: z.string().optional().describe("Bind to an existing supervisor session"),
-}, async ({ task, playbookId, bundleId, windowId, steps, tags, priority, maxRetries, sessionId }) => {
+  chainId: z.string().optional().describe("Chain ID to group linked jobs into a flow"),
+  dependsOn: z.string().optional().describe("Job ID this job depends on — won't run until dependency is done"),
+  vars: z.record(z.string(), z.string()).optional().describe("Variables for template substitution in playbook steps (e.g. {PROMPT_TEXT} → 'hello world'). Use {prev.outputKey} to reference outputs from dependsOn job."),
+}, async ({ task, playbookId, bundleId, windowId, steps, tags, priority, maxRetries, sessionId, chainId, dependsOn, vars }) => {
   const createOpts: Parameters<typeof jobManager.create>[0] = { task };
   if (playbookId !== undefined) createOpts.playbookId = playbookId;
   if (bundleId !== undefined) createOpts.bundleId = bundleId;
@@ -2573,8 +2576,41 @@ originalTool("job_create", "Create a new automation job. Jobs persist across res
   if (priority !== undefined) createOpts.priority = priority;
   if (maxRetries !== undefined) createOpts.maxRetries = maxRetries;
   if (sessionId !== undefined) createOpts.sessionId = sessionId;
+  if (chainId !== undefined) createOpts.chainId = chainId;
+  if (dependsOn !== undefined) createOpts.dependsOn = dependsOn;
+  if (vars !== undefined) createOpts.vars = vars as Record<string, string>;
   const job = jobManager.create(createOpts);
-  return { content: [{ type: "text" as const, text: `Job created: ${job.id}\nTask: ${job.task}\nState: ${job.state}\nSteps: ${job.steps.length}\nPriority: ${job.priority}\nTarget: ${job.bundleId ?? "(any app)"}${job.windowId != null ? ` window ${job.windowId}` : ""}` }] };
+  const extra = [];
+  if (job.chainId) extra.push(`Chain: ${job.chainId}`);
+  if (job.dependsOn) extra.push(`Depends on: ${job.dependsOn}`);
+  if (job.vars && Object.keys(job.vars).length > 0) extra.push(`Vars: ${Object.keys(job.vars).join(", ")}`);
+  return { content: [{ type: "text" as const, text: `Job created: ${job.id}\nTask: ${job.task}\nState: ${job.state}\nSteps: ${job.steps.length}\nPriority: ${job.priority}\nTarget: ${job.bundleId ?? "(any app)"}${job.windowId != null ? ` window ${job.windowId}` : ""}${extra.length > 0 ? "\n" + extra.join("\n") : ""}` }] };
+});
+
+originalTool("job_create_chain", "Create a chain of linked jobs that run sequentially. Each job waits for the previous one to finish. Use vars with {prev.outputKey} to pass data between jobs.", {
+  jobs: z.array(z.object({
+    task: z.string().describe("What this job does"),
+    playbookId: z.string().optional().describe("Playbook ID"),
+    bundleId: z.string().optional().describe("Target app bundle ID"),
+    vars: z.record(z.string(), z.string()).optional().describe("Variables — use {prev.Read_Codex_response} to get output from prior job step"),
+    tags: z.array(z.string()).optional(),
+  })).describe("Ordered list of jobs to chain"),
+}, async ({ jobs }) => {
+  const cleanJobs = jobs.map(j => {
+    const clean: { task: string; playbookId?: string; bundleId?: string; vars?: Record<string, string>; tags?: string[] } = { task: j.task };
+    if (j.playbookId) clean.playbookId = j.playbookId;
+    if (j.bundleId) clean.bundleId = j.bundleId;
+    if (j.vars) clean.vars = j.vars as Record<string, string>;
+    if (j.tags) clean.tags = j.tags;
+    return clean;
+  });
+  const chain = jobManager.createChain({ jobs: cleanJobs });
+  const lines = [`Chain created: ${chain[0]?.chainId ?? "unknown"} (${chain.length} jobs)`];
+  for (const job of chain) {
+    lines.push(`  ${job.id}: ${job.task}${job.dependsOn ? ` (after ${job.dependsOn})` : " (first)"}`);
+  }
+  lines.push("", "Run with: job_run_all() to execute the full chain sequentially.");
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });
 
 originalTool("job_status", "Get detailed status of a job including step progress and resume point.", {
@@ -2600,6 +2636,9 @@ originalTool("job_status", "Get detailed status of a job including step progress
     `Resume point: ${resume ? `step ${resume.stepIndex} — ${resume.step.description ?? resume.step.action}` : "(none — all done or no pending steps)"}`,
     `Retries: ${job.retries}/${job.maxRetries}`,
   ];
+  if (job.chainId) lines.push(`Chain: ${job.chainId}`);
+  if (job.dependsOn) lines.push(`Depends on: ${job.dependsOn}`);
+  if (job.vars && Object.keys(job.vars).length > 0) lines.push(`Vars: ${JSON.stringify(job.vars)}`);
   if (job.blockReason) lines.push(`Block reason: ${job.blockReason}`);
   if (job.lastError) lines.push(`Last error: ${job.lastError}`);
   if (job.startedAt) lines.push(`Started: ${job.startedAt}`);
@@ -2610,6 +2649,7 @@ originalTool("job_status", "Get detailed status of a job including step progress
     for (const s of job.steps) {
       const icon = s.status === "done" ? "✓" : s.status === "failed" ? "✗" : s.status === "skipped" ? "–" : "○";
       lines.push(`  ${icon} [${s.index}] ${s.description ?? s.action}${s.error ? ` (${s.error})` : ""}${s.durationMs != null ? ` ${s.durationMs}ms` : ""}`);
+      if (s.output) lines.push(`      → ${s.output.substring(0, 200)}${s.output.length > 200 ? "..." : ""}`);
     }
   }
 
@@ -2711,17 +2751,33 @@ originalTool("job_remove", "Remove a job entirely (any state).", {
 const PLAYBOOKS_DIR = path.join(os.homedir(), ".screenhand", "playbooks");
 
 let activeJobRunner: JobRunner | null = null;
+let activePlaybookStore: PlaybookStore | null = null;
 
 
 function getJobRunner(): JobRunner {
+  // Always reload playbooks from disk (new files may have been added)
+  if (!activePlaybookStore) {
+    activePlaybookStore = new PlaybookStore(PLAYBOOKS_DIR);
+  }
+  activePlaybookStore.load();
+
   if (!activeJobRunner) {
     // Build playbook engine stack: adapter → runtime → engine
     const adapter = new AccessibilityAdapter(bridge);
     const logger = new TimelineLogger();
     const runtimeService = new AutomationRuntimeService(adapter, logger);
     const playbookEngine = new PlaybookEngine(runtimeService);
-    const playbookStore = new PlaybookStore(PLAYBOOKS_DIR);
-    playbookStore.load();
+    // Wire CDP into playbook engine for browser_js / cdp_key_event steps
+    playbookEngine.setCDPConnect(async (overridePort?: number) => {
+      if (overridePort) {
+        if (!CDP) CDP = (await import("chrome-remote-interface")).default;
+        const client = await CDP({ port: overridePort });
+        return { Runtime: client.Runtime, Input: client.Input, close: () => client.close() };
+      }
+      const { CDP: CDPClient, port } = await ensureCDP();
+      const client = await CDPClient({ port });
+      return { Runtime: client.Runtime, Input: client.Input, close: () => client.close() };
+    });
 
     activeJobRunner = new JobRunner(
       bridge,
@@ -2732,7 +2788,7 @@ function getJobRunner(): JobRunner {
         const cfg: Partial<import("./src/jobs/runner.js").JobRunnerConfig> = {
           hasCDP: cdpPort !== null,
           playbookEngine,
-          playbookStore,
+          playbookStore: activePlaybookStore,
           runtimeService,
         };
         if (cdpPort) {
