@@ -96,8 +96,14 @@ async function ensureBridge() {
 let cdpPort: number | null = null;
 let CDP: any = null;
 
-async function ensureCDP(): Promise<{ CDP: any; port: number }> {
+async function ensureCDP(overridePort?: number): Promise<{ CDP: any; port: number }> {
   if (!CDP) CDP = (await import("chrome-remote-interface")).default;
+  // If caller specified a port, use it directly (e.g. 9333 for Electron apps)
+  if (overridePort) {
+    try { await CDP.Version({ port: overridePort }); return { CDP, port: overridePort }; } catch {
+      throw new Error(`CDP not available on port ${overridePort}. Ensure the app is running with --remote-debugging-port=${overridePort}`);
+    }
+  }
   if (cdpPort) {
     try { await CDP.Version({ port: cdpPort }); return { CDP, port: cdpPort }; } catch {}
   }
@@ -138,7 +144,11 @@ _playbookStoreForContext.load();
 const contextTracker = new ContextTracker(_playbookStoreForContext, path.resolve(__dirname, "playbooks"));
 const mcpRecorder = new McpPlaybookRecorder(path.resolve(__dirname, "playbooks"));
 
-// Skip logging for memory tools themselves
+// Tools excluded from the intelligence wrapper (memory/context hints).
+// Memory, supervisor, job, and daemon lifecycle tools skip the wrapper to avoid recursion
+// and because they don't benefit from playbook hints.
+// NOTE: platform knowledge tools (platform_guide, playbook_preflight, export_playbook)
+// are NOT excluded — they benefit from context-aware hints.
 const MEMORY_TOOLS = new Set([
   "memory_snapshot", "memory_recall", "memory_save", "memory_record_error",
   "memory_record_learning", "memory_query_patterns", "memory_errors",
@@ -151,8 +161,6 @@ const MEMORY_TOOLS = new Set([
   "job_step_done", "job_step_fail", "job_resume", "job_dequeue", "job_remove",
   "job_run", "job_run_all",
   "worker_start", "worker_stop", "worker_status",
-  "playbook_preflight", "platform_guide", "export_playbook",
-  "playbook_record", "platform_learn", "platform_explore",
   "job_create_chain",
   "observer_start", "observer_stop", "observer_status",
   "orchestrator_start", "orchestrator_stop", "orchestrator_submit", "orchestrator_status",
@@ -538,10 +546,13 @@ server.tool("click_text", "SLOW fallback: Find text on screen via OCR and click 
     return { content: [{ type: "text", text: `"${text}" not found. Available: ${ocr.regions.map((r:any) => r.text).slice(0, 20).join(", ")}` }] };
   }
 
-  const shadowL = (shot.width - wb.width * 2) / 2;
-  const shadowT = (shot.height - wb.height * 2) / 3;
-  const sx = wb.x + (match.bounds.x + match.bounds.width / 2 - shadowL) / 2;
-  const sy = wb.y + (match.bounds.y + match.bounds.height / 2 - shadowT) / 2 + (offset_y || 0);
+  // Convert OCR pixel coordinates to screen coordinates.
+  // shot.width/height are in pixels; wb.width/height are in screen points.
+  // The scale factor handles both Retina (2x) and non-Retina (1x) displays.
+  const scaleX = shot.width > 0 ? wb.width / shot.width : 1;
+  const scaleY = shot.height > 0 ? wb.height / shot.height : 1;
+  const sx = wb.x + (match.bounds.x + match.bounds.width / 2) * scaleX;
+  const sy = wb.y + (match.bounds.y + match.bounds.height / 2) * scaleY + (offset_y || 0);
 
   await bridge.call("cg.mouseMove", { x: sx, y: sy });
   await new Promise(r => setTimeout(r, 50));
@@ -586,8 +597,8 @@ server.tool("scroll", "Scroll at a position", {
 });
 
 // ── CDP helper: get client for a tab ──
-async function getCDPClient(tabId?: string): Promise<{ client: any; targetId: string; CDP: any; port: number }> {
-  const { CDP: cdp, port } = await ensureCDP();
+async function getCDPClient(tabId?: string, overridePort?: number): Promise<{ client: any; targetId: string; CDP: any; port: number }> {
+  const { CDP: cdp, port } = await ensureCDP(overridePort);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -608,27 +619,31 @@ function randomDelay(min: number, max: number): Promise<void> {
 // BROWSER — control Chrome pages via CDP (10ms, not OCR)
 // ═══════════════════════════════════════════════
 
-server.tool("browser_tabs", "List all open Chrome tabs", {}, async () => {
-  const { CDP: cdp, port } = await ensureCDP();
+server.tool("browser_tabs", "List all open Chrome/Electron tabs. Use cdpPort to connect to a specific app (e.g. 9333 for Codex Desktop).", {
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps). Omit to auto-detect."),
+}, async ({ cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   const targets = await cdp.List({ port });
   const pages = targets.filter((t: any) => t.type === "page");
   const lines = pages.map((t: any) => `[${t.id}] ${t.title} — ${t.url}`);
   return { content: [{ type: "text", text: lines.join("\n") || "No tabs open" }] };
 });
 
-server.tool("browser_open", "Open a URL in Chrome (creates new tab)", {
+server.tool("browser_open", "Open a URL in Chrome/Electron (creates new tab)", {
   url: z.string().describe("URL to open"),
-}, async ({ url }) => {
-  const { CDP: cdp, port } = await ensureCDP();
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ url, cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   const target = await cdp.New({ port, url });
   return { content: [{ type: "text", text: `Opened: ${target.id} — ${url}` }] };
 });
 
-server.tool("browser_navigate", "Navigate the active Chrome tab to a URL", {
+server.tool("browser_navigate", "Navigate the active Chrome/Electron tab to a URL", {
   url: z.string().describe("URL to navigate to"),
   tabId: z.string().optional().describe("Tab ID (from browser_tabs). Omit for most recent tab."),
-}, async ({ url, tabId }) => {
-  const { CDP: cdp, port } = await ensureCDP();
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ url, tabId, cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -651,12 +666,13 @@ server.tool("browser_navigate", "Navigate the active Chrome tab to a URL", {
   return { content: [{ type: "text", text: `Navigated to: ${title.result.value}` }] };
 });
 
-server.tool("browser_js", "Execute JavaScript in a Chrome tab. Returns the result. WARNING: This runs arbitrary JS in the browser context — avoid on sensitive pages (banking, email). All executions are audit-logged.", {
+server.tool("browser_js", "Execute JavaScript in a Chrome/Electron tab. Returns the result. WARNING: This runs arbitrary JS in the browser context — avoid on sensitive pages (banking, email). All executions are audit-logged.", {
   code: z.string().describe("JavaScript to execute. Must be an expression that returns a value. Use (() => { ... })() for multi-line."),
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
-}, async ({ code, tabId }) => {
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ code, tabId, cdpPort: portOverride }) => {
   auditLog("browser_js", { code: code.slice(0, 500), tabId });
-  const { CDP: cdp, port } = await ensureCDP();
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -682,12 +698,13 @@ server.tool("browser_js", "Execute JavaScript in a Chrome tab. Returns the resul
   return { content: [{ type: "text", text }] };
 });
 
-server.tool("browser_dom", "Query the DOM of a Chrome page. Returns matching elements' text, attributes, and structure.", {
+server.tool("browser_dom", "Query the DOM of a Chrome/Electron page. Returns matching elements' text, attributes, and structure.", {
   selector: z.string().describe("CSS selector, e.g. 'button', '.nav a', '#main h2'"),
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
   limit: z.number().optional().describe("Max results (default 20)"),
-}, async ({ selector, tabId, limit }) => {
-  const { CDP: cdp, port } = await ensureCDP();
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ selector, tabId, limit, cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -720,11 +737,12 @@ server.tool("browser_dom", "Query the DOM of a Chrome page. Returns matching ele
   return { content: [{ type: "text", text: JSON.stringify(result.result.value, null, 2) }] };
 });
 
-server.tool("browser_click", "Click an element in Chrome by CSS selector. Uses CDP Input.dispatchMouseEvent for realistic mouse events.", {
+server.tool("browser_click", "Click an element in Chrome/Electron by CSS selector. Uses CDP Input.dispatchMouseEvent for realistic mouse events.", {
   selector: z.string().describe("CSS selector of element to click"),
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
-}, async ({ selector, tabId }) => {
-  const { client } = await getCDPClient(tabId);
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ selector, tabId, cdpPort: portOverride }) => {
+  const { client } = await getCDPClient(tabId, portOverride);
   await client.Runtime.enable();
 
   const result = await client.Runtime.evaluate({
@@ -755,13 +773,14 @@ server.tool("browser_click", "Click an element in Chrome by CSS selector. Uses C
   return { content: [{ type: "text", text: `Clicked: "${val.text}" at (${Math.round(x)}, ${Math.round(y)})` }] };
 });
 
-server.tool("browser_type", "Type into an input field in Chrome. Uses CDP Input.dispatchKeyEvent for real keyboard events (works with React/Angular).", {
+server.tool("browser_type", "Type into an input field in Chrome/Electron. Uses CDP Input.dispatchKeyEvent for real keyboard events (works with React/Angular).", {
   selector: z.string().describe("CSS selector of the input"),
   text: z.string().describe("Text to type"),
   clear: z.boolean().optional().describe("Clear field first (default true)"),
   tabId: z.string().optional().describe("Tab ID"),
-}, async ({ selector, text, clear, tabId }) => {
-  const { client } = await getCDPClient(tabId);
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ selector, text, clear, tabId, cdpPort: portOverride }) => {
+  const { client } = await getCDPClient(tabId, portOverride);
   await client.Runtime.enable();
 
   // Focus the element
@@ -802,12 +821,13 @@ server.tool("browser_type", "Type into an input field in Chrome. Uses CDP Input.
   return { content: [{ type: "text", text: `Typed "${text}"` }] };
 });
 
-server.tool("browser_wait", "Wait for a condition on a Chrome page", {
+server.tool("browser_wait", "Wait for a condition on a Chrome/Electron page", {
   condition: z.string().describe("JS expression that returns truthy when ready. e.g. 'document.querySelector(\".loaded\")'"),
   timeoutMs: z.number().optional().describe("Timeout in ms (default 10000)"),
   tabId: z.string().optional().describe("Tab ID"),
-}, async ({ condition, timeoutMs, tabId }) => {
-  const { CDP: cdp, port } = await ensureCDP();
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ condition, timeoutMs, tabId, cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -830,8 +850,9 @@ server.tool("browser_wait", "Wait for a condition on a Chrome page", {
 
 server.tool("browser_page_info", "Get current page title, URL, and text content summary", {
   tabId: z.string().optional().describe("Tab ID"),
-}, async ({ tabId }) => {
-  const { CDP: cdp, port } = await ensureCDP();
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ tabId, cdpPort: portOverride }) => {
+  const { CDP: cdp, port } = await ensureCDP(portOverride);
   let targetId = tabId;
   if (!targetId) {
     const targets = await cdp.List({ port });
@@ -894,10 +915,11 @@ if (origQuery) {
 }
 `;
 
-server.tool("browser_stealth", "Inject anti-detection patches into Chrome page. Call once after navigating to a protected site. Hides webdriver flag, patches plugins/languages/permissions.", {
+server.tool("browser_stealth", "Inject anti-detection patches into Chrome/Electron page. Call once after navigating to a protected site. Hides webdriver flag, patches plugins/languages/permissions.", {
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
-}, async ({ tabId }) => {
-  const { client } = await getCDPClient(tabId);
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ tabId, cdpPort: portOverride }) => {
+  const { client } = await getCDPClient(tabId, portOverride);
   await client.Page.enable();
   await client.Page.addScriptToEvaluateOnNewDocument({ source: STEALTH_SCRIPT });
   // Also evaluate immediately on current page
@@ -917,8 +939,9 @@ server.tool("browser_fill_form", "Fill a form field with human-like typing (anti
   clear: z.boolean().optional().describe("Clear field first (default true)"),
   delayMs: z.number().optional().describe("Avg delay between keystrokes in ms (default 50)"),
   tabId: z.string().optional().describe("Tab ID"),
-}, async ({ selector, text, clear, delayMs, tabId }) => {
-  const { client } = await getCDPClient(tabId);
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ selector, text, clear, delayMs, tabId, cdpPort: portOverride }) => {
+  const { client } = await getCDPClient(tabId, portOverride);
   await client.Runtime.enable();
 
   // Focus the element
@@ -962,15 +985,16 @@ server.tool("browser_fill_form", "Fill a form field with human-like typing (anti
   return { content: [{ type: "text", text: `Typed "${text}" (${text.length} chars, human-like)` }] };
 });
 
-server.tool("browser_human_click", "Click an element with realistic mouse events (anti-detection). Dispatches mouseMoved → mousePressed → mouseReleased at element coordinates.", {
+// browser_human_click — alias for browser_click (both already use realistic mouse events)
+server.tool("browser_human_click", "Alias for browser_click — both use realistic mouseMoved → mousePressed → mouseReleased events. Prefer browser_click directly.", {
   selector: z.string().describe("CSS selector of element to click"),
   tabId: z.string().optional().describe("Tab ID. Omit for most recent tab."),
-}, async ({ selector, tabId }) => {
-  const { client } = await getCDPClient(tabId);
+  cdpPort: z.number().optional().describe("CDP port override (e.g. 9333 for Electron apps)"),
+}, async ({ selector, tabId, cdpPort: portOverride }) => {
+  const { client } = await getCDPClient(tabId, portOverride);
   await client.Runtime.enable();
 
-  // Get element center coordinates
-  const rectResult = await client.Runtime.evaluate({
+  const result = await client.Runtime.evaluate({
     expression: `(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return { ok: false, reason: "Element not found: ${selector.replace(/"/g, '\\"')}" };
@@ -981,15 +1005,13 @@ server.tool("browser_human_click", "Click an element with realistic mouse events
     returnByValue: true,
   });
 
-  const val = rectResult.result.value;
+  const val = result.result.value;
   if (!val?.ok) {
     await client.close();
     return { content: [{ type: "text", text: val?.reason || "Element not found" }] };
   }
 
   const { x, y } = val;
-
-  // Simulate realistic mouse event sequence
   await client.Input.dispatchMouseEvent({ type: "mouseMoved", x, y });
   await randomDelay(30, 60);
   await client.Input.dispatchMouseEvent({ type: "mousePressed", x, y, button: "left", clickCount: 1 });
@@ -1270,7 +1292,7 @@ server.tool("export_playbook", "Generate a playbook JSON from your session. Extr
 
   // 2. Scan current page for selectors if tab is available
   let pageSelectors: Record<string, string> = {};
-  if (tabId || true) {
+  if (tabId) {
     try {
       const { client } = await getCDPClient(tabId);
       await client.Runtime.enable();
@@ -2141,7 +2163,7 @@ import {
 } from "./src/runtime/execution-contract.js";
 import type { ExecutionMethod, ActionResult } from "./src/runtime/execution-contract.js";
 
-originalTool("execution_plan", "Show the execution plan for an action type. Returns the ordered fallback chain based on available infrastructure.", {
+server.tool("execution_plan", "Show the execution plan for an action type. Returns the ordered fallback chain based on available infrastructure.", {
   action: z.enum(["click", "type", "read", "locate", "select", "scroll"]).describe("Action type"),
 }, async ({ action }) => {
   const plan = planExecution(action, { hasBridge: true, hasCDP: cdpPort !== null });
@@ -2186,7 +2208,7 @@ function formatResult(action: string, target: string, result: ActionResult): { c
 
 // ── click_with_fallback ──
 
-originalTool("click_with_fallback", "Click a target by text using the canonical fallback chain: AX → CDP → OCR. Automatically retries and falls through methods.", {
+server.tool("click_with_fallback", "Click a target by text using the canonical fallback chain: AX → CDP → OCR. Automatically retries and falls through methods.", {
   target: z.string().describe("Text, title, or identifier of the element to click"),
   bundleId: z.string().optional().describe("App bundle ID (for AX path)"),
 }, async ({ target, bundleId }) => {
@@ -2268,7 +2290,7 @@ originalTool("click_with_fallback", "Click a target by text using the canonical 
 
 // ── type_with_fallback ──
 
-originalTool("type_with_fallback", "Type text into a target field using the canonical fallback chain: AX → CDP → coordinates. Finds the field by label/placeholder, focuses it, then types.", {
+server.tool("type_with_fallback", "Type text into a target field using the canonical fallback chain: AX → CDP → coordinates. Finds the field by label/placeholder, focuses it, then types.", {
   target: z.string().describe("Label, placeholder, or title of the field to type into"),
   text: z.string().describe("Text to type"),
   bundleId: z.string().optional().describe("App bundle ID"),
@@ -2316,8 +2338,9 @@ originalTool("type_with_fallback", "Type text into a target field using the cano
             });
             if (!evalResult.result?.value) throw new Error("Field not found via CDP");
             if (clearFirst) {
-              await Input.dispatchKeyEvent({ type: "keyDown", key: "a", code: "KeyA", modifiers: 2 });
-              await Input.dispatchKeyEvent({ type: "keyUp", key: "a", code: "KeyA", modifiers: 2 });
+              const selectAllMod = process.platform === "darwin" ? 4 : 2; // Cmd on macOS, Ctrl on Windows/Linux
+              await Input.dispatchKeyEvent({ type: "keyDown", key: "a", code: "KeyA", modifiers: selectAllMod });
+              await Input.dispatchKeyEvent({ type: "keyUp", key: "a", code: "KeyA", modifiers: selectAllMod });
             }
             for (const char of text) {
               await Input.dispatchKeyEvent({ type: "keyDown", key: char, text: char });
@@ -2340,7 +2363,7 @@ originalTool("type_with_fallback", "Type text into a target field using the cano
 
 // ── read_with_fallback ──
 
-originalTool("read_with_fallback", "Read text content from the screen or a specific element using the canonical fallback chain: AX → CDP → OCR. Returns the text found.", {
+server.tool("read_with_fallback", "Read text content from the screen or a specific element using the canonical fallback chain: AX → CDP → OCR. Returns the text found.", {
   target: z.string().optional().describe("Element label/title to read from (omit for full-screen OCR)"),
   bundleId: z.string().optional().describe("App bundle ID"),
 }, async ({ target, bundleId }) => {
@@ -2433,7 +2456,7 @@ originalTool("read_with_fallback", "Read text content from the screen or a speci
 
 // ── locate_with_fallback ──
 
-originalTool("locate_with_fallback", "Find an element's position on screen using the canonical fallback chain: AX → CDP → OCR. Returns bounds (x, y, width, height).", {
+server.tool("locate_with_fallback", "Find an element's position on screen using the canonical fallback chain: AX → CDP → OCR. Returns bounds (x, y, width, height).", {
   target: z.string().describe("Text, title, or identifier of the element to locate"),
   bundleId: z.string().optional().describe("App bundle ID"),
 }, async ({ target, bundleId }) => {
@@ -2504,7 +2527,7 @@ originalTool("locate_with_fallback", "Find an element's position on screen using
 
 // ── select_with_fallback ──
 
-originalTool("select_with_fallback", "Select an option from a dropdown/menu using the canonical fallback chain: AX → CDP. Finds the control, opens it, and picks the specified option.", {
+server.tool("select_with_fallback", "Select an option from a dropdown/menu using the canonical fallback chain: AX → CDP. Finds the control, opens it, and picks the specified option.", {
   target: z.string().describe("Label or title of the dropdown/menu control"),
   option: z.string().describe("Text of the option to select"),
   bundleId: z.string().optional().describe("App bundle ID"),
@@ -2580,7 +2603,7 @@ originalTool("select_with_fallback", "Select an option from a dropdown/menu usin
 
 // ── scroll_with_fallback ──
 
-originalTool("scroll_with_fallback", "Scroll within an element or the active window using the canonical fallback chain: AX → CDP → coordinates. Scrolls until target text is visible, or by a fixed amount.", {
+server.tool("scroll_with_fallback", "Scroll within an element or the active window using the canonical fallback chain: AX → CDP → coordinates. Scrolls until target text is visible, or by a fixed amount.", {
   direction: z.enum(["up", "down", "left", "right"]).describe("Scroll direction"),
   amount: z.number().optional().describe("Scroll amount in pixels (default: 300)"),
   target: z.string().optional().describe("Scroll until this text is visible (overrides amount)"),
@@ -2625,12 +2648,7 @@ originalTool("scroll_with_fallback", "Scroll within an element or the active win
 
       switch (method) {
         case "ax": {
-          // Use AX scroll action on the focused element
-          const tree = await bridge.call<{ elementPath: number[] }>("ax.getElementTree", {
-            pid: targetPid,
-            maxDepth: 1,
-          });
-          // Fall through to cg.scroll since AX scroll is less reliable
+          // AX scroll is unreliable — use CG scroll directly (works on the focused app)
           await bridge.call("cg.scroll", { deltaX, deltaY });
           return { ok: true, method, durationMs: Date.now() - start, fallbackFrom: null, retries: attempt, error: null, target: `${direction} ${scrollAmount}px` };
         }
@@ -2664,7 +2682,7 @@ originalTool("scroll_with_fallback", "Scroll within an element or the active win
 
 // ── wait_for_state ──
 
-originalTool("wait_for_state", "Wait until a condition is met on screen: text appears, text disappears, or element becomes available. Polls at intervals using the fallback chain.", {
+server.tool("wait_for_state", "Wait until a condition is met on screen: text appears, text disappears, or element becomes available. Polls at intervals using the fallback chain.", {
   condition: z.enum(["text_appears", "text_disappears", "element_exists"]).describe("What to wait for"),
   target: z.string().describe("Text or element to watch for"),
   timeoutMs: z.number().optional().describe("Maximum wait time in ms (default: 10000)"),
@@ -3349,7 +3367,10 @@ server.tool("observer_start", "Start the observer daemon to continuously watch a
     return { content: [{ type: "text" as const, text: `Observer daemon failed to start (mode=${usedCompiled ? "compiled" : "tsx"}).\nCheck log: ${OBSERVER_LOG_FILE}` }] };
   }
 
-  // Enable popup checks in the playbook engine
+  // Enable popup checks in the playbook engine (lazy-init if needed)
+  if (!activePlaybookEngine) {
+    getJobRunner(); // initializes activePlaybookEngine as a side effect
+  }
   if (activePlaybookEngine) activePlaybookEngine.setPopupCheck(true);
 
   return { content: [{ type: "text" as const, text: `Observer daemon started (pid=${verifyPid}).\nWatching: ${bundleId} (window ${windowId})\nInterval: ${intervalMs ?? 2000}ms\nLog: ${OBSERVER_LOG_FILE}\n\nPopup auto-dismiss enabled in playbook engine.\nUse observer_status to check frames/popups.` }] };
@@ -3402,252 +3423,6 @@ server.tool("observer_status", "Get observer daemon status — frames captured, 
   lines.push(`\nLog: ${OBSERVER_LOG_FILE}`);
 
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-});
-
-// ═══════════════════════════════════════════════
-// CODEX MONITOR — watch VS Code terminals, auto-assign tasks
-// ═══════════════════════════════════════════════
-
-// Daemon state directory
-const MONITOR_DIR = path.join(os.homedir(), ".screenhand", "monitor");
-const MONITOR_STATE = path.join(MONITOR_DIR, "state.json");
-const MONITOR_TASKS = path.join(MONITOR_DIR, "tasks.json");
-const MONITOR_PID = path.join(MONITOR_DIR, "daemon.pid");
-const MONITOR_LOG = path.join(MONITOR_DIR, "daemon.log");
-const DAEMON_SCRIPT = path.resolve(__dirname, "scripts", "codex-monitor-daemon.ts");
-
-function isDaemonRunning(): { running: boolean; pid: number | null } {
-  try {
-    if (!fs.existsSync(MONITOR_PID)) return { running: false, pid: null };
-    const pid = Number(fs.readFileSync(MONITOR_PID, "utf-8").trim());
-    // Check if process is alive
-    process.kill(pid, 0);
-    return { running: true, pid };
-  } catch {
-    return { running: false, pid: null };
-  }
-}
-
-function readDaemonState(): any {
-  try {
-    if (!fs.existsSync(MONITOR_STATE)) return null;
-    return JSON.parse(fs.readFileSync(MONITOR_STATE, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-function readDaemonTasks(): any[] {
-  try {
-    if (!fs.existsSync(MONITOR_TASKS)) return [];
-    return JSON.parse(fs.readFileSync(MONITOR_TASKS, "utf-8"));
-  } catch {
-    return [];
-  }
-}
-
-function writeDaemonTasks(tasks: any[]) {
-  fs.mkdirSync(MONITOR_DIR, { recursive: true });
-  fs.writeFileSync(MONITOR_TASKS, JSON.stringify(tasks, null, 2));
-}
-
-server.tool("codex_monitor_start", "Start a background daemon that monitors VS Code terminals for Codex/AI agent activity. Runs independently — survives Claude Code restarts. Watches terminal output via OCR, detects running/idle/done.", {
-  vscodePid: z.number().describe("Process ID of VS Code (get from 'apps' tool)"),
-  windowId: z.number().optional().describe("Window ID of the VS Code window (get from 'windows' tool). Auto-detected if omitted."),
-  label: z.string().optional().describe("Label for this terminal (default: 'Terminal')"),
-  pollIntervalMs: z.number().optional().describe("How often to poll in ms (default: 3000)"),
-  autoAssign: z.boolean().optional().describe("Auto-assign queued tasks when terminal goes idle (default: true)"),
-}, async ({ vscodePid, windowId, label, pollIntervalMs, autoAssign }) => {
-  const { running, pid } = isDaemonRunning();
-  if (running) {
-    return { content: [{ type: "text", text: `Daemon already running (pid=${pid}). Use codex_monitor_stop first to restart.` }] };
-  }
-
-  // Build daemon args
-  const daemonArgs = ["tsx", DAEMON_SCRIPT, "--pid", String(vscodePid)];
-  if (windowId) daemonArgs.push("--window", String(windowId));
-  if (pollIntervalMs) daemonArgs.push("--poll", String(pollIntervalMs));
-  if (label) daemonArgs.push("--label", label);
-  if (autoAssign === false) daemonArgs.push("--no-auto-assign");
-
-  // Spawn detached daemon
-  const child = spawn("npx", daemonArgs, {
-    detached: true,
-    stdio: "ignore",
-    cwd: __dirname,
-  });
-  child.unref();
-
-  const daemonPid = child.pid;
-
-  // Wait a moment for daemon to start and write state
-  await new Promise((r) => setTimeout(r, 3000));
-
-  const state = readDaemonState();
-  const terminalId = state?.terminals?.[0]?.id ?? "pending";
-
-  return {
-    content: [{
-      type: "text",
-      text: `Background daemon started!\n` +
-        `Daemon PID: ${daemonPid}\n` +
-        `Terminal ID: ${terminalId}\n` +
-        `VS Code PID: ${vscodePid}\n` +
-        `Window ID: ${windowId ?? "auto-detecting"}\n` +
-        `Poll interval: ${pollIntervalMs ?? 3000}ms\n` +
-        `Auto-assign: ${autoAssign !== false}\n` +
-        `Log: ${MONITOR_LOG}\n` +
-        `State: ${MONITOR_STATE}\n\n` +
-        `The daemon runs independently — survives Claude Code restarts.\n` +
-        `Use codex_monitor_status to check on it anytime.`,
-    }],
-  };
-});
-
-server.tool("codex_monitor_status", "Get status of the background monitor daemon. Shows terminal status, agent activity, task queue, and daemon health.", {
-  tail_log: z.number().optional().describe("Show last N lines of daemon log (default: 0, max: 50)"),
-}, async ({ tail_log }) => {
-  const { running, pid } = isDaemonRunning();
-  const state = readDaemonState();
-  const tasks = readDaemonTasks();
-
-  const lines: string[] = [];
-  lines.push(`Daemon: ${running ? "RUNNING" : "STOPPED"} (pid=${pid ?? "none"})`);
-
-  if (state?.terminals) {
-    for (const t of state.terminals) {
-      const lastOutput = (t.lastOutput || "").split("\n").slice(-5).join("\n").trim();
-      lines.push("");
-      lines.push(`--- ${t.id} ---`);
-      lines.push(`  Status: ${(t.status || "unknown").toUpperCase()}`);
-      lines.push(`  VS Code PID: ${t.vscodePid}`);
-      lines.push(`  Window ID: ${t.windowId ?? "unknown"}`);
-      lines.push(`  Current task: ${t.lastTask ?? "none"}`);
-      lines.push(`  Tasks completed: ${t.tasksCompleted}`);
-      lines.push(`  Last poll: ${t.lastPollAt}`);
-      lines.push(`  Last output (tail):`);
-      lines.push(`    ${lastOutput.split("\n").join("\n    ")}`);
-    }
-  } else if (!running) {
-    lines.push("\nNo monitor running. Use codex_monitor_start first.");
-  }
-
-  const queued = tasks.filter((t: any) => t.status === "queued").length;
-  const runningTasks = tasks.filter((t: any) => t.status === "running").length;
-  const completed = tasks.filter((t: any) => t.status === "completed").length;
-  lines.push("");
-  lines.push(`Tasks: ${queued} queued, ${runningTasks} running, ${completed} completed`);
-
-  // Optionally show daemon log tail
-  if (tail_log && tail_log > 0) {
-    try {
-      const logContent = fs.readFileSync(MONITOR_LOG, "utf-8");
-      const logLines = logContent.trim().split("\n").slice(-(Math.min(tail_log, 50)));
-      lines.push("");
-      lines.push("--- Daemon Log ---");
-      lines.push(logLines.join("\n"));
-    } catch {
-      lines.push("\n(no log file found)");
-    }
-  }
-
-  return { content: [{ type: "text", text: lines.join("\n") }] };
-});
-
-server.tool("codex_monitor_add_task", "Add a task to the daemon's queue. When a monitored terminal goes idle, the next task is automatically typed in and executed.", {
-  prompt: z.string().describe("The prompt/command to send to Codex when a terminal is available"),
-  priority: z.number().optional().describe("Priority (lower = higher priority, default: 10)"),
-  terminalId: z.string().optional().describe("Assign to a specific terminal (omit for any available)"),
-}, async ({ prompt, priority, terminalId }) => {
-  const tasks = readDaemonTasks();
-  const task = {
-    id: "task_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    prompt,
-    priority: priority ?? 10,
-    terminalId: terminalId ?? null,
-    status: "queued",
-    createdAt: new Date().toISOString(),
-    assignedAt: null,
-    completedAt: null,
-    result: null,
-  };
-  tasks.push(task);
-  tasks.sort((a: any, b: any) => a.priority - b.priority);
-  writeDaemonTasks(tasks);
-
-  const queued = tasks.filter((t: any) => t.status === "queued").length;
-
-  return {
-    content: [{
-      type: "text",
-      text: `Task queued!\n` +
-        `ID: ${task.id}\n` +
-        `Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? "..." : ""}"\n` +
-        `Priority: ${task.priority}\n` +
-        `Target terminal: ${task.terminalId ?? "any available"}\n` +
-        `Queue size: ${queued}`,
-    }],
-  };
-});
-
-server.tool("codex_monitor_tasks", "List all tasks in the daemon's queue with their status.", {
-  status: z.enum(["all", "queued", "running", "completed", "failed"]).optional().describe("Filter by status (default: all)"),
-}, async ({ status }) => {
-  let tasks = readDaemonTasks();
-
-  if (status && status !== "all") {
-    tasks = tasks.filter((t: any) => t.status === status);
-  }
-
-  if (tasks.length === 0) {
-    return { content: [{ type: "text", text: `No ${status ?? ""} tasks.` }] };
-  }
-
-  const lines = tasks.map((t: any, i: number) => {
-    const parts = [
-      `${i + 1}. [${t.status.toUpperCase()}] "${(t.prompt || "").slice(0, 80)}"`,
-      `   ID: ${t.id} | Priority: ${t.priority}`,
-      `   Terminal: ${t.terminalId ?? "any"}`,
-      `   Created: ${t.createdAt}`,
-    ];
-    if (t.assignedAt) parts.push(`   Assigned: ${t.assignedAt}`);
-    if (t.completedAt) parts.push(`   Completed: ${t.completedAt}`);
-    if (t.result) parts.push(`   Result: ${(t.result || "").slice(0, 100)}`);
-    return parts.join("\n");
-  });
-
-  return { content: [{ type: "text", text: lines.join("\n\n") }] };
-});
-
-server.tool("codex_monitor_assign_now", "Immediately type a prompt into the VS Code terminal (bypasses queue). Focuses VS Code, types, presses Enter.", {
-  prompt: z.string().describe("The prompt/command to type into the terminal"),
-}, async ({ prompt }) => {
-  await ensureBridge();
-  try {
-    await bridge.call("app.focus", { bundleId: "com.microsoft.VSCode" });
-    await new Promise((r) => setTimeout(r, 300));
-    await bridge.call("cg.typeText", { text: prompt });
-    await new Promise((r) => setTimeout(r, 100));
-    await bridge.call("cg.keyCombo", { keys: ["enter"] });
-    return { content: [{ type: "text", text: `Typed and sent: "${prompt.slice(0, 100)}"` }] };
-  } catch (err: any) {
-    return { content: [{ type: "text", text: `Failed: ${err.message}` }] };
-  }
-});
-
-server.tool("codex_monitor_stop", "Stop the background monitor daemon.", {}, async () => {
-  const { running, pid } = isDaemonRunning();
-  if (!running) {
-    return { content: [{ type: "text", text: "No daemon running." }] };
-  }
-  try {
-    process.kill(pid!, "SIGTERM");
-    // Wait for it to clean up
-    await new Promise((r) => setTimeout(r, 1000));
-    return { content: [{ type: "text", text: `Daemon stopped (pid=${pid}).` }] };
-  } catch (err: any) {
-    return { content: [{ type: "text", text: `Failed to stop daemon: ${err.message}` }] };
-  }
 });
 
 // ═══════════════════════════════════════════════

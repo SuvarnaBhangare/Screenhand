@@ -21,7 +21,22 @@
 
 export interface PlaybookStep {
   /** Action to perform */
-  action: "navigate" | "press" | "type_into" | "extract" | "key" | "key_combo" | "menu_click" | "scroll" | "wait" | "screenshot" | "browser_js" | "cdp_key_event";
+  action:
+    | "navigate"
+    | "press"
+    | "type_into"
+    | "extract"
+    | "key"
+    | "key_combo"
+    | "menu_click"
+    | "scroll"
+    | "wait"
+    | "screenshot"
+    | "browser_js"
+    | "browser_click"
+    | "browser_type"
+    | "browser_human_click"
+    | "cdp_key_event";
   /** Target — CSS selector, text, or {x,y} */
   target?: string | { selector: string } | { x: number; y: number };
   /** Text to type (for type_into) */
@@ -90,6 +105,8 @@ export interface Playbook {
   description: string;
   /** Platform/site this targets */
   platform: string;
+  /** macOS bundle ID for native app matching (e.g. "com.blackmagic-design.DaVinciResolveLite") */
+  bundleId?: string;
   /** URL patterns where this playbook applies */
   urlPatterns?: string[];
   /** CDP port override for this playbook (e.g. 9333 for Codex desktop) */

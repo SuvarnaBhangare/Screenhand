@@ -3,6 +3,8 @@
   "name": "Codex Desktop App Automation",
   "description": "Battle-tested playbook for OpenAI Codex desktop app automation via CDP. Covers thread creation, prompt submission, result reading, sidebar navigation, and menu actions. Requires launching Codex with --remote-debugging-port flag.",
   "platform": "codex-desktop",
+  "bundleId": "com.openai.codex",
+  "cdpPort": 9333,
   "version": "2.0.0",
   "urlPatterns": ["app://-/index.html*"],
   "tags": ["codex", "openai", "desktop", "electron", "cdp", "ai-agent"],

@@ -32,7 +32,10 @@ import type { DetectedPopup } from "../observer/types.js";
 /** CDP client interface — matches what JobRunner already provides */
 export interface CDPConnection {
   Runtime: { evaluate: (params: { expression: string; awaitPromise?: boolean; returnByValue?: boolean }) => Promise<any> };
-  Input: { dispatchKeyEvent: (params: Record<string, unknown>) => Promise<any> };
+  Input: {
+    dispatchKeyEvent: (params: Record<string, unknown>) => Promise<any>;
+    dispatchMouseEvent: (params: Record<string, unknown>) => Promise<any>;
+  };
   close: () => Promise<void>;
 }
 
@@ -238,6 +241,43 @@ export class PlaybookEngine {
         }
       }
 
+      case "browser_click":
+      case "browser_human_click": {
+        const selector = this.getBrowserSelector(step);
+        if (!this.cdpConnect) throw new Error(`${step.action} requires CDP — call setCDPConnect() first`);
+        const client = await this.cdpConnect(cdpPort);
+        try {
+          const point = await this.resolveBrowserClickPoint(client, selector);
+          await this.dispatchMouseClick(client, point.x, point.y);
+          return `${step.action}: clicked ${selector}`;
+        } finally {
+          await client.close();
+        }
+      }
+
+      case "browser_type": {
+        const selector = this.getBrowserSelector(step);
+        if (!step.text) throw new Error("browser_type step missing text");
+        if (!this.cdpConnect) throw new Error("browser_type requires CDP — call setCDPConnect() first");
+        const client = await this.cdpConnect(cdpPort);
+        try {
+          await this.focusBrowserElement(client, selector);
+          const shouldClear = step.text !== undefined;
+          if (shouldClear) {
+            await this.dispatchSelectAll(client);
+            await this.dispatchKey(client, "Backspace", "Backspace");
+            await sleep(50);
+          }
+          for (const char of step.text) {
+            await this.dispatchTextChar(client, char);
+            await sleep(50);
+          }
+          return `browser_type: typed ${step.text.length} chars into ${selector}`;
+        } finally {
+          await client.close();
+        }
+      }
+
       case "cdp_key_event": {
         if (!step.keyEvent) throw new Error("cdp_key_event step missing keyEvent");
         if (!this.cdpConnect) throw new Error("cdp_key_event requires CDP — call setCDPConnect() first");
@@ -402,6 +442,72 @@ export class PlaybookEngine {
     }
 
     return undefined;
+  }
+
+  private getBrowserSelector(step: PlaybookStep): string {
+    if (typeof step.target === "string") return step.target;
+    if (step.target && "selector" in step.target) return step.target.selector;
+    if (step.verify) return step.verify;
+    throw new Error(`${step.action} step missing selector target`);
+  }
+
+  private async focusBrowserElement(client: CDPConnection, selector: string): Promise<void> {
+    const result = await client.Runtime.evaluate({
+      expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLElement)) return { ok: false, reason: "Element not found: ${selector.replace(/"/g, '\\"')}" };
+        el.scrollIntoView({ block: "center" });
+        el.focus();
+        return { ok: true };
+      })()`,
+      returnByValue: true,
+    });
+    const value = result.result?.value;
+    if (!value?.ok) {
+      throw new Error(value?.reason || `Element not found: ${selector}`);
+    }
+  }
+
+  private async resolveBrowserClickPoint(client: CDPConnection, selector: string): Promise<{ x: number; y: number }> {
+    const result = await client.Runtime.evaluate({
+      expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLElement)) return { ok: false, reason: "Element not found: ${selector.replace(/"/g, '\\"')}" };
+        el.scrollIntoView({ block: "center" });
+        const r = el.getBoundingClientRect();
+        return { ok: true, x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`,
+      returnByValue: true,
+    });
+    const value = result.result?.value;
+    if (!value?.ok) {
+      throw new Error(value?.reason || `Element not found: ${selector}`);
+    }
+    return { x: value.x, y: value.y };
+  }
+
+  private async dispatchMouseClick(client: CDPConnection, x: number, y: number): Promise<void> {
+    await client.Input.dispatchMouseEvent({ type: "mouseMoved", x, y });
+    await sleep(40);
+    await client.Input.dispatchMouseEvent({ type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await sleep(40);
+    await client.Input.dispatchMouseEvent({ type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  }
+
+  private async dispatchSelectAll(client: CDPConnection): Promise<void> {
+    const metaModifier = process.platform === "darwin" ? 4 : 2;
+    await client.Input.dispatchKeyEvent({ type: "keyDown", key: "a", code: "KeyA", modifiers: metaModifier });
+    await client.Input.dispatchKeyEvent({ type: "keyUp", key: "a", code: "KeyA", modifiers: metaModifier });
+  }
+
+  private async dispatchKey(client: CDPConnection, key: string, code: string): Promise<void> {
+    await client.Input.dispatchKeyEvent({ type: "keyDown", key, code });
+    await client.Input.dispatchKeyEvent({ type: "keyUp", key, code });
+  }
+
+  private async dispatchTextChar(client: CDPConnection, char: string): Promise<void> {
+    await client.Input.dispatchKeyEvent({ type: "keyDown", text: char, key: char, unmodifiedText: char });
+    await client.Input.dispatchKeyEvent({ type: "keyUp", text: char, key: char, unmodifiedText: char });
   }
 }
 

@@ -3,6 +3,7 @@
   "name": "DaVinci Resolve Keyboard + Menu Reference",
   "description": "Keyboard-first and menu-path reference for DaVinci Resolve 20.3 automation in ScreenHand. Built for environments where accessibility is unreliable and the safest control surface is key + menu_click + screenshot.",
   "platform": "davinci-resolve",
+  "bundleId": "com.blackmagic-design.DaVinciResolveLite",
   "version": "20.3.2",
   "tags": [
     "davinci-resolve",

@@ -156,7 +156,7 @@ export async function discoverNativeElements(
   pid: number,
   maxElements: number,
 ): Promise<DiscoveredElement[]> {
-  const tree = await bridge.call<any>("ax.elementTree", { pid, maxDepth: 5 });
+  const tree = await bridge.call<any>("ax.getElementTree", { pid, maxDepth: 5 });
   const elements: DiscoveredElement[] = [];
 
   const CLICKABLE_ROLES = new Set([

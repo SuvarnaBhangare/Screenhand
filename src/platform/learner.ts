@@ -201,6 +201,42 @@ export function compileLearnResult(
         }
       }
 
+      // Extract flows from numbered step sequences (e.g. "1. Click..." "2. Enter..." "3. Submit...")
+      const contentLines = page.content.text.split("\n");
+      let currentFlow: { name: string; steps: string[] } | null = null;
+      for (let i = 0; i < contentLines.length; i++) {
+        const line = contentLines[i]!.trim();
+        const stepMatch = line.match(/^(\d+)[.)]\s+(.+)/);
+        if (stepMatch) {
+          const stepNum = parseInt(stepMatch[1]!, 10);
+          const stepText = stepMatch[2]!.trim();
+          if (stepNum === 1 && stepText.length > 5) {
+            // Start a new flow — use the preceding heading as the name
+            const heading = i > 0 ? contentLines.slice(Math.max(0, i - 3), i).find(l => l.trim().length > 3 && !l.trim().match(/^\d/)) : null;
+            const flowName = (heading?.trim() ?? `flow_${Object.keys(flows).length + 1}`).replace(/[^a-zA-Z0-9_ ]/g, "").substring(0, 50).trim();
+            currentFlow = { name: flowName, steps: [stepText] };
+          } else if (currentFlow && stepNum > 1) {
+            currentFlow.steps.push(stepText);
+          }
+        } else if (currentFlow && currentFlow.steps.length >= 2) {
+          // End of step sequence — save the flow
+          const key = currentFlow.name.toLowerCase().replace(/\s+/g, "_");
+          if (!flows[key]) {
+            flows[key] = { description: currentFlow.name, steps: currentFlow.steps };
+          }
+          currentFlow = null;
+        } else if (line.length > 0 && !line.match(/^\d/)) {
+          currentFlow = null;
+        }
+      }
+      // Save any trailing flow
+      if (currentFlow && currentFlow.steps.length >= 2) {
+        const key = currentFlow.name.toLowerCase().replace(/\s+/g, "_");
+        if (!flows[key]) {
+          flows[key] = { description: currentFlow.name, steps: currentFlow.steps };
+        }
+      }
+
       // Look for limitation/known-issue mentions
       const text = page.content.text.toLowerCase();
       if (text.includes("limitation") || text.includes("known issue") || text.includes("not supported")) {

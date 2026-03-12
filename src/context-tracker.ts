@@ -63,6 +63,14 @@ const URL_TOOLS = new Set([
   "browser_open", "browser_navigate",
 ]);
 
+// Tools that carry a bundleId — native app tools where context should trigger
+const BUNDLE_ID_TOOLS = new Set([
+  "focus", "launch", "ui_tree", "ui_find", "ui_press", "ui_set_value", "menu_click",
+  "click_with_fallback", "type_with_fallback", "read_with_fallback",
+  "locate_with_fallback", "select_with_fallback", "scroll_with_fallback",
+  "wait_for_state",
+]);
+
 // Tools that carry a target/selector in their params
 const TARGET_PARAM_NAMES = ["selector", "target", "text", "label", "placeholder"];
 
@@ -84,28 +92,41 @@ export class ContextTracker {
   // ═══════════════════════════════════════════════
 
   /**
-   * Call after every tool call. Extracts domain from params if present.
-   * Only does a playbook lookup when the domain actually changes.
+   * Call after every tool call. Extracts domain from URL params or
+   * bundleId from native tool params. Only does a playbook lookup
+   * when the context key actually changes.
    */
   updateContext(toolName: string, params: Record<string, unknown>): void {
-    // Extract URL from tool params
-    if (!URL_TOOLS.has(toolName)) return;
-    const url = params.url as string | undefined;
-    if (!url) return;
+    // Path 1: URL-bearing tools (browser_open, browser_navigate)
+    if (URL_TOOLS.has(toolName)) {
+      const url = params.url as string | undefined;
+      if (!url) return;
 
-    let domain: string;
-    try {
-      domain = new URL(url).hostname.replace(/^www\./, "");
-    } catch {
+      let domain: string;
+      try {
+        domain = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        return;
+      }
+
+      if (this.context?.domain === domain) return;
+
+      const playbook = this.store.matchByDomain(domain);
+      this.context = buildCachedContext(domain, playbook);
       return;
     }
 
-    // Skip if domain hasn't changed
-    if (this.context?.domain === domain) return;
+    // Path 2: bundleId-bearing tools (native app automation)
+    if (BUNDLE_ID_TOOLS.has(toolName)) {
+      const bundleId = (params.bundleId ?? params.pid) as string | undefined;
+      if (!bundleId) return;
 
-    // Domain changed — find matching playbook (one Map scan)
-    const playbook = this.store.matchByDomain(domain);
-    this.context = buildCachedContext(domain, playbook);
+      const contextKey = `native:${bundleId}`;
+      if (this.context?.domain === contextKey) return;
+
+      const playbook = this.store.matchByBundleId(bundleId);
+      this.context = buildCachedContext(contextKey, playbook);
+    }
   }
 
   // ═══════════════════════════════════════════════
@@ -213,7 +234,7 @@ export class ContextTracker {
     // ── Promote selectors that worked 2+ times ──
     const selectorSuccessCount = new Map<string, number>();
     for (const l of this.learnings) {
-      if (l.success && l.target && l.target.startsWith("[") || l.target?.startsWith("#") || l.target?.startsWith(".")) {
+      if (l.success && l.target && (l.target.startsWith("[") || l.target.startsWith("#") || l.target.startsWith("."))) {
         const key = l.target!;
         selectorSuccessCount.set(key, (selectorSuccessCount.get(key) ?? 0) + 1);
       }

@@ -100,6 +100,43 @@ export class PlaybookStore {
     return bestScore > 0 ? best : null;
   }
 
+  /** Find best playbook matching a macOS bundle ID (e.g., "com.blackmagic-design.DaVinciResolveLite"). */
+  matchByBundleId(bundleId: string): Playbook | null {
+    const idLower = bundleId.toLowerCase();
+    // Extract the short app name from bundleId (e.g., "davinciresolvelite" from "com.blackmagic-design.DaVinciResolveLite")
+    const shortName = idLower.split(".").pop() ?? idLower;
+
+    let best: Playbook | null = null;
+    let bestScore = 0;
+
+    for (const p of this.playbooks.values()) {
+      let score = 0;
+
+      // Direct bundleId match (if the reference stores it)
+      if (p.bundleId?.toLowerCase() === idLower) score += 10;
+
+      // Check platform name against short app name
+      const platLower = p.platform.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const shortClean = shortName.replace(/[^a-z0-9]/g, "");
+      if (platLower.includes(shortClean) || shortClean.includes(platLower)) score += 3;
+
+      // Check tags
+      if (p.tags.some((t) => idLower.includes(t.toLowerCase().replace(/[^a-z0-9.]/g, "")))) score += 1;
+
+      // Weight by reliability
+      if (score > 0 && p.successCount + p.failCount > 0) {
+        score *= p.successCount / (p.successCount + p.failCount);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+
+    return bestScore > 0 ? best : null;
+  }
+
   /** Find playbooks matching a URL. */
   matchByUrl(url: string): Playbook[] {
     return this.getAll().filter((p) => {
@@ -224,6 +261,8 @@ export class PlaybookStore {
       failCount: 0,
 
       // Preserve rich metadata
+      ...(raw.bundleId ? { bundleId: raw.bundleId as string } : {}),
+      ...(raw.cdpPort ? { cdpPort: raw.cdpPort as number } : {}),
       ...(raw.urls ? { urls: raw.urls as Record<string, string> } : {}),
       ...(raw.selectors ? { selectors: raw.selectors as Record<string, Record<string, string>> } : {}),
       ...(raw.flows ? { flows: raw.flows as Record<string, import("./types.js").PlaybookFlow> } : {}),

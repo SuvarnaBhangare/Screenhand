@@ -3,6 +3,7 @@
   "name": "Discord Automation",
   "description": "Battle-tested playbook for Discord browser automation via CDP. Covers server navigation, channel browsing, messaging, DMs, reactions, server joining, friend requests, and search. Discord uses React with aria-labels and data-list-item-id attributes for reliable selectors.",
   "platform": "discord",
+  "bundleId": "com.hnc.Discord",
   "version": "1.0.0",
   "urlPatterns": [
     "*discord.com*"
