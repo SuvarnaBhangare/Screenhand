@@ -12,9 +12,65 @@ An open-source [MCP server](https://modelcontextprotocol.io/) for macOS and Wind
 [![Platform: macOS & Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-green)]()
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-purple)]()
 
-[Website](https://screenhand.com) | [Quick Start](#quick-start) | [Why ScreenHand](#why-screenhand) | [Tools](#tools) | [FAQ](#faq)
+[Website](https://screenhand.com) | [Plugin](#claude-code-plugin) | [Quick Start](#quick-start) | [Why ScreenHand](#why-screenhand) | [Tools](#tools) | [FAQ](#faq)
 
 </div>
+
+---
+
+## Claude Code Plugin
+
+ScreenHand ships with a full Claude Code plugin — **13 skills and 5 specialized agents** that wrap all 88 tools into intent-oriented workflows.
+
+### Install
+
+```bash
+# Option A: Load directly (development)
+claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
+
+# Option B: Copy to personal plugins
+cp -r /path/to/screenhand/.claude/plugins/screenhand ~/.claude/plugins/
+
+# Set the MCP server path
+export SCREENHAND_PATH="/path/to/screenhand"
+```
+
+### Skills
+
+| Skill | Command | What it does |
+|-------|---------|-------------|
+| Automate App | `/screenhand:automate-app` | Control any desktop app — click, type, navigate menus |
+| Post Social | `/screenhand:post-social` | Post to X, LinkedIn, Instagram, Reddit, Threads, Discord |
+| Run Campaign | `/screenhand:run-campaign` | Multi-platform marketing campaigns (parallel or sequential) |
+| Edit Video | `/screenhand:edit-video` | DaVinci Resolve — color grade, edit timeline, render |
+| Design Figma | `/screenhand:design-figma` | Create/edit Figma designs via Plugin API + browser |
+| Edit Canva | `/screenhand:edit-canva` | Edit Canva templates, add elements, download |
+| Scrape Web | `/screenhand:scrape-web` | Extract data from any website with anti-detection |
+| Fill Form | `/screenhand:fill-form` | Fill web forms with human-like typing |
+| QA Smoke Test | `/screenhand:qa-smoke-test` | Automated UI testing, accessibility audits |
+| Record Workflow | `/screenhand:record-workflow` | Record actions into reusable playbooks |
+| Learn Platform | `/screenhand:learn-platform` | Discover how to automate a new app/site |
+| Run Jobs | `/screenhand:run-jobs` | Manage job queues, background workers, orchestrator |
+| Manage System | `/screenhand:manage-system` | Supervisor, memory health, session diagnostics |
+
+### Agents
+
+| Agent | Specialty |
+|-------|-----------|
+| marketing-agent | Social media campaigns, content adaptation, rate limits |
+| design-agent | Figma, Canva, DaVinci Resolve automation |
+| qa-agent | Test planning, UI validation, accessibility audits |
+| scraper-agent | Web data extraction, pagination, structured output |
+| orchestrator-agent | Parallel task decomposition, worker slot management |
+
+Each skill includes an **Intelligence Wrapper** — the server automatically injects `[HINT]`, `[WARNING]`, and `[STRATEGY]` lines into tool responses from curated reference files and verified learnings.
+
+### Electron App Support (cdpPort)
+
+All `browser_*` tools accept an optional `cdpPort` parameter for controlling Electron apps:
+- Chrome: auto-detected on ports 9222-9224
+- Codex Desktop: port 9333 (reference: `codex-desktop`)
+- Custom Electron apps: pass `cdpPort` explicitly
 
 ---
 
@@ -660,72 +716,6 @@ Click buttons, verify text appears, catch visual regressions — all driven by A
 - No special permissions needed — UI Automation works without admin
 - Chrome with `--remote-debugging-port=9222` (only for browser tools)
 - Build: `npm run build:native:windows`
-
-## Claude Code Plugin
-
-ScreenHand ships with a full Claude Code plugin — **13 skills and 5 specialized agents** that wrap all 88 tools into intent-oriented workflows.
-
-### Install
-
-```bash
-# Option A: Load directly (development)
-claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
-
-# Option B: Copy to personal plugins
-cp -r /path/to/screenhand/.claude/plugins/screenhand ~/.claude/plugins/
-
-# Set the MCP server path
-export SCREENHAND_PATH="/path/to/screenhand"
-```
-
-### Skills
-
-| Skill | Command | What it does |
-|-------|---------|-------------|
-| Automate App | `/screenhand:automate-app` | Control any desktop app — click, type, navigate menus |
-| Post Social | `/screenhand:post-social` | Post to X, LinkedIn, Instagram, Reddit, Threads, Discord |
-| Run Campaign | `/screenhand:run-campaign` | Multi-platform marketing campaigns (parallel or sequential) |
-| Edit Video | `/screenhand:edit-video` | DaVinci Resolve — color grade, edit timeline, render |
-| Design Figma | `/screenhand:design-figma` | Create/edit Figma designs via Plugin API + browser |
-| Edit Canva | `/screenhand:edit-canva` | Edit Canva templates, add elements, download |
-| Scrape Web | `/screenhand:scrape-web` | Extract data from any website with anti-detection |
-| Fill Form | `/screenhand:fill-form` | Fill web forms with human-like typing |
-| QA Smoke Test | `/screenhand:qa-smoke-test` | Automated UI testing, accessibility audits |
-| Record Workflow | `/screenhand:record-workflow` | Record actions into reusable playbooks |
-| Learn Platform | `/screenhand:learn-platform` | Discover how to automate a new app/site |
-| Run Jobs | `/screenhand:run-jobs` | Manage job queues, background workers, orchestrator |
-| Manage System | `/screenhand:manage-system` | Supervisor, memory health, session diagnostics |
-
-### Agents
-
-| Agent | Specialty |
-|-------|-----------|
-| marketing-agent | Social media campaigns, content adaptation, rate limits |
-| design-agent | Figma, Canva, DaVinci Resolve automation |
-| qa-agent | Test planning, UI validation, accessibility audits |
-| scraper-agent | Web data extraction, pagination, structured output |
-| orchestrator-agent | Parallel task decomposition, worker slot management |
-
-Each skill includes an **Intelligence Wrapper** section — the server automatically injects `[HINT]`, `[WARNING]`, and `[STRATEGY]` lines into tool responses from curated reference files and verified learnings.
-
-### Electron App Support (cdpPort)
-
-All `browser_*` tools accept an optional `cdpPort` parameter for controlling Electron apps:
-- Chrome: auto-detected on ports 9222-9224
-- Codex Desktop: port 9333 (reference: `codex-desktop`)
-- Custom Electron apps: pass `cdpPort` explicitly
-
-### Basic Slash Commands
-
-Three standalone slash commands also work without the full plugin:
-
-- `/screenshot` — capture your screen and describe what's visible
-- `/debug-ui` — inspect the UI tree of any app
-- `/automate` — describe a task and Claude does it
-
-```bash
-./install-skills.sh   # Install globally
-```
 
 ## Development
 
