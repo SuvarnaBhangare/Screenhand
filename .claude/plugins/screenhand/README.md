@@ -6,39 +6,24 @@ Desktop and browser automation for Claude Code. Control any macOS/Windows app, a
 
 ## Quick Start
 
-### 1. Prerequisites
-
-- ScreenHand repository cloned and dependencies installed:
-  ```bash
-  cd /path/to/screenhand
-  npm install
-  npm run build:native   # macOS: builds Swift accessibility bridge
-  ```
-- Chrome launched with remote debugging for browser tools:
-  ```bash
-  /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-  ```
-
-### 2. Install Plugin
-
 ```bash
-# Option A: Load directly (for development)
-claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
-
-# Option B: Copy to personal plugins
-cp -r /path/to/screenhand/.claude/plugins/screenhand ~/.claude/plugins/
+git clone https://github.com/manushi4/screenhand.git
+cd screenhand
+npm install && npm run build:native
+./install-plugin.sh
 ```
 
-### 3. Configure MCP Path
+The install script copies the plugin to `~/.claude/plugins/screenhand/`, configures the MCP server path, and creates `~/.screenhand/` for logs and state. Restart Claude Code after installing.
 
-Set the `SCREENHAND_PATH` environment variable to your ScreenHand installation (required):
-
+For browser automation, launch Chrome with remote debugging:
 ```bash
-# Add to ~/.zshrc or ~/.bashrc
-export SCREENHAND_PATH="/path/to/screenhand"
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
 
-The MCP server will not start without this variable. It should point to the directory containing `mcp-desktop.ts`.
+> **Development mode**: Load the plugin directly instead of installing:
+> ```bash
+> claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
+> ```
 
 ## Skills
 

@@ -25,15 +25,18 @@ ScreenHand ships with a full Claude Code plugin — **13 skills and 5 specialize
 ### Install
 
 ```bash
-# Option A: Load directly (development)
-claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
-
-# Option B: Copy to personal plugins
-cp -r /path/to/screenhand/.claude/plugins/screenhand ~/.claude/plugins/
-
-# Set the MCP server path
-export SCREENHAND_PATH="/path/to/screenhand"
+git clone https://github.com/manushi4/screenhand.git
+cd screenhand
+npm install && npm run build:native
+./install-plugin.sh
 ```
+
+The install script copies the plugin to `~/.claude/plugins/screenhand/`, configures the MCP server path automatically, and creates the state directory. Restart Claude Code after installing.
+
+> **Development mode**: If you're hacking on ScreenHand itself, load the plugin directly instead:
+> ```bash
+> claude --plugin-dir /path/to/screenhand/.claude/plugins/screenhand
+> ```
 
 ### Skills
 
