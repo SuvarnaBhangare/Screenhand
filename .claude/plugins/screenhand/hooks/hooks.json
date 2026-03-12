@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__sh__ui_press|mcp__sh__browser_click|mcp__sh__click_with_fallback|mcp__sh__browser_fill_form|mcp__sh__type_with_fallback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ts=$(date +%Y%m%d_%H%M%S) && echo \"[screenhand] $ts tool=$TOOL_NAME status=$TOOL_STATUS\" >> ~/.screenhand/plugin-hook.log"
+          }
+        ]
+      }
+    ]
+  }
+}
