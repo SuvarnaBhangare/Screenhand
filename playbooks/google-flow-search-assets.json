@@ -1,0 +1,64 @@
+{
+  "id": "google-flow-search-assets",
+  "name": "Google Flow — Search Assets",
+  "description": "Open a Flow project and search its asset grid for {SEARCH_TERM}. If {PROJECT_NAME} is omitted, the first visible project is used.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "assets",
+    "search"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for dashboard project cards"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawWanted = `{PROJECT_NAME}`.trim(); const wanted = rawWanted.toLowerCase(); const hasWanted = !!rawWanted && rawWanted !== '{PROJECT_NAME}'; const links = [...document.querySelectorAll(\"a[href*='/fx/tools/flow/project/']\")].filter(visible); if (!links.length) throw new Error('No Flow project cards found'); const pick = hasWanted ? links.find(link => ((link.closest('div')?.textContent || link.parentElement?.textContent || '')).toLowerCase().includes(wanted)) : links[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error(hasWanted ? `Flow project not found: ${rawWanted}` : 'No clickable Flow project found'); const url = pick.href || pick.getAttribute('href'); if (!url) throw new Error('Project card is missing href'); window.location.assign(url); return url; })()",
+      "description": "Open the matching project card",
+      "verify": "form input[type='text']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 600,
+      "description": "Allow the project toolbar to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const text = `{SEARCH_TERM}`; if (!text.trim() || text === '{SEARCH_TERM}') throw new Error('SEARCH_TERM variable is required'); const input = document.querySelector(\"form input[type='text']\"); if (!(input instanceof HTMLInputElement)) throw new Error('Flow search input not found'); input.focus(); input.value = ''; input.value = text; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); return input.value; })()",
+      "description": "Enter the asset search term"
+    },
+    {
+      "action": "wait",
+      "ms": 700,
+      "description": "Wait for the grid to update"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const button = [...document.querySelectorAll('button,[role=\"button\"]')].filter(visible).find(el => (el.textContent || '').replace(/\\s+/g, ' ').includes('Sort & Filter')); if (!(button instanceof HTMLElement)) return 'filter button not visible'; button.click(); return 'opened Sort & Filter'; })()",
+      "description": "Open Sort & Filter for manual follow-up if available",
+      "optional": true
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the filtered asset view",
+      "optional": true
+    }
+  ]
+}

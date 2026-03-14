@@ -1,0 +1,382 @@
+// Copyright (C) 2025 Clazro Technology Private Limited
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { writeFileAtomicSync } from "../util/atomic-write.js";
+import { LocatorPolicy } from "./locator-policy.js";
+import { RecoveryPolicy } from "./recovery-policy.js";
+import { TimingModel } from "./timing-model.js";
+import { SensorPolicy } from "./sensor-policy.js";
+import { PatternPolicy } from "./pattern-policy.js";
+import type {
+  LearningEngineConfig,
+  LocatorOutcome,
+  RecoveryOutcomeEvent,
+  ToolTimingEvent,
+  SensorOutcome,
+  PatternOutcome,
+  AdaptiveBudget,
+  LocatorEntry,
+  PatternEntry,
+  RecoveryPolicyEntry,
+  SensorPolicyEntry,
+  TimingSample,
+} from "./types.js";
+import { DEFAULT_LEARNING_CONFIG } from "./types.js";
+import type { BlockerType } from "../recovery/types.js";
+
+/**
+ * Prune an array to `max` entries, keeping the most recent by date field.
+ */
+function pruneByDate<T>(
+  entries: T[],
+  max: number,
+  getDate: (entry: T) => string,
+): T[] {
+  return [...entries]
+    .sort((a, b) => getDate(b).localeCompare(getDate(a)))
+    .slice(0, max);
+}
+
+/**
+ * LearningEngine — the central coordinator for all learning policies.
+ *
+ * Observes outcomes from tool execution, recovery, and perception,
+ * updates the four sub-policies, and provides recommendations that
+ * make the system smarter over time.
+ *
+ * Persistence: each policy writes its own JSONL file in the data directory.
+ * Loading is eager (on init), saving is debounced.
+ */
+export class LearningEngine {
+  readonly locators: LocatorPolicy;
+  readonly recovery: RecoveryPolicy;
+  readonly timing: TimingModel;
+  readonly sensors: SensorPolicy;
+  readonly patterns: PatternPolicy;
+  private readonly config: LearningEngineConfig;
+  private dirty = false;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(config?: Partial<LearningEngineConfig>) {
+    this.config = {
+      ...DEFAULT_LEARNING_CONFIG,
+      dataDir:
+        config?.dataDir ??
+        path.join(os.homedir(), ".screenhand", "learning"),
+      ...config,
+    };
+    this.locators = new LocatorPolicy(this.config.priorStrength);
+    this.recovery = new RecoveryPolicy(this.config.priorStrength);
+    this.timing = new TimingModel(this.config.maxTimingSamples);
+    this.sensors = new SensorPolicy(this.config.priorStrength);
+    this.patterns = new PatternPolicy(this.config.priorStrength);
+  }
+
+  /**
+   * Initialize: create data directory and load persisted data.
+   */
+  init(): void {
+    fs.mkdirSync(this.config.dataDir, { recursive: true });
+    this.load();
+  }
+
+  // ── Record Outcomes ─────────────────────────────────────────────
+
+  recordLocatorOutcome(outcome: LocatorOutcome): void {
+    this.locators.record(outcome);
+    this.scheduleSave();
+  }
+
+  recordRecoveryOutcome(outcome: RecoveryOutcomeEvent): void {
+    this.recovery.record(outcome);
+    this.scheduleSave();
+  }
+
+  recordToolTiming(event: ToolTimingEvent): void {
+    this.timing.record(event);
+    this.scheduleSave();
+  }
+
+  recordSensorOutcome(outcome: SensorOutcome): void {
+    this.sensors.record(outcome);
+    this.scheduleSave();
+  }
+
+  recordPattern(outcome: PatternOutcome): void {
+    this.patterns.record(outcome);
+    this.scheduleSave();
+  }
+
+  // ── Recommendations ─────────────────────────────────────────────
+
+  /**
+   * Get the best locator for a given app×action.
+   */
+  recommendLocator(
+    bundleId: string,
+    actionKey: string,
+  ): LocatorEntry | null {
+    return this.locators.recommend(
+      bundleId,
+      actionKey,
+      this.config.minSamplesForConfidence,
+    );
+  }
+
+  /**
+   * Get ranked recovery strategies for a blocker×app pair.
+   */
+  rankRecoveryStrategies(
+    blockerType: BlockerType,
+    bundleId: string,
+  ): Array<{ strategyId: string; score: number }> {
+    return this.recovery.rank(blockerType, bundleId);
+  }
+
+  /**
+   * Get adaptive timeouts for a given app.
+   */
+  getAdaptiveBudget(bundleId: string): AdaptiveBudget {
+    return this.timing.getAdaptiveBudget(
+      bundleId,
+      this.config.minSamplesForConfidence,
+    );
+  }
+
+  /**
+   * Get ranked perception sources for a given app.
+   */
+  rankSensors(
+    bundleId: string,
+  ): Array<{ sourceType: string; score: number; avgLatencyMs: number }> {
+    return this.sensors.rank(bundleId);
+  }
+
+  /**
+   * Query verified UI patterns for a given app, optionally filtered by tool.
+   */
+  queryPatterns(bundleId: string, tool?: string): PatternEntry[] {
+    return this.patterns.query(bundleId, tool);
+  }
+
+  /**
+   * Get the best verified pattern for a given app×tool.
+   */
+  recommendPattern(bundleId: string, tool: string): PatternEntry | null {
+    return this.patterns.recommend(
+      bundleId,
+      tool,
+      this.config.minSamplesForConfidence,
+    );
+  }
+
+  /**
+   * Get a summary of learning stats for a given app.
+   */
+  getAppSummary(bundleId: string): {
+    locatorEntries: number;
+    recoveryEntries: number;
+    timingSamples: number;
+    sensorEntries: number;
+    patternEntries: number;
+    topLocatorMethod: string | null;
+    topSensor: string | null;
+    adaptiveBudget: AdaptiveBudget;
+  } {
+    const locEntries = this.locators
+      .getAllEntries()
+      .filter((e) => e.key.startsWith(`${bundleId}::`));
+    const recEntries = this.recovery
+      .getAllEntries()
+      .filter((e) => e.key.endsWith(`::${bundleId}`));
+    const timSamples = this.timing
+      .getAllSamples()
+      .filter((s) => s.bundleId === bundleId);
+    const senEntries = this.sensors
+      .getAllEntries()
+      .filter((e) => e.bundleId === bundleId);
+    const patEntries = this.patterns.query(bundleId);
+
+    const topSensor = this.sensors.recommend(bundleId, 1);
+    const topLoc = locEntries.sort((a, b) => b.score - a.score)[0];
+
+    return {
+      locatorEntries: locEntries.length,
+      recoveryEntries: recEntries.length,
+      timingSamples: timSamples.length,
+      sensorEntries: senEntries.length,
+      patternEntries: patEntries.length,
+      topLocatorMethod: topLoc?.method ?? null,
+      topSensor,
+      adaptiveBudget: this.getAdaptiveBudget(bundleId),
+    };
+  }
+
+  // ── Persistence ─────────────────────────────────────────────────
+
+  /**
+   * Clear all learning data and flush empty state to disk.
+   */
+  reset(): void {
+    this.locators.clear();
+    this.recovery.clear();
+    this.timing.clear();
+    this.sensors.clear();
+    this.patterns.clear();
+    this.flush();
+  }
+
+  /**
+   * Force save all policies to disk.
+   */
+  flush(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.save();
+  }
+
+  private scheduleSave(): void {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      if (this.dirty) {
+        this.save();
+        this.dirty = false;
+      }
+    }, 500);
+  }
+
+  private save(): void {
+    try {
+      const dir = this.config.dataDir;
+      const max = this.config.maxEntriesPerFile;
+
+      // Locator entries — prune by lastUsed
+      let locatorEntries = this.locators.getAllEntries();
+      if (locatorEntries.length > max) {
+        locatorEntries = pruneByDate(locatorEntries, max, (e) => e.lastUsed);
+        this.locators.loadEntries(locatorEntries);
+      }
+      const locatorData = locatorEntries.map((e) => JSON.stringify(e)).join("\n");
+      if (locatorData) {
+        writeFileAtomicSync(path.join(dir, "locators.jsonl"), locatorData + "\n");
+      }
+
+      // Recovery entries — prune by lastUsed
+      let recoveryEntries = this.recovery.getAllEntries();
+      if (recoveryEntries.length > max) {
+        recoveryEntries = pruneByDate(recoveryEntries, max, (e) => e.lastUsed);
+        this.recovery.loadEntries(recoveryEntries);
+      }
+      const recoveryData = recoveryEntries.map((e) => JSON.stringify(e)).join("\n");
+      if (recoveryData) {
+        writeFileAtomicSync(path.join(dir, "recoveries.jsonl"), recoveryData + "\n");
+      }
+
+      // Timing samples — prune by timestamp
+      let timingSamples = this.timing.getAllSamples();
+      if (timingSamples.length > max) {
+        timingSamples = pruneByDate(timingSamples, max, (s) => s.timestamp);
+        this.timing.loadSamples(timingSamples);
+      }
+      const timingData = timingSamples.map((s) => JSON.stringify(s)).join("\n");
+      if (timingData) {
+        writeFileAtomicSync(path.join(dir, "timings.jsonl"), timingData + "\n");
+      }
+
+      // Sensor entries — prune by lastUsed
+      let sensorEntries = this.sensors.getAllEntries();
+      if (sensorEntries.length > max) {
+        sensorEntries = pruneByDate(sensorEntries, max, (e) => e.lastUsed);
+        this.sensors.loadEntries(sensorEntries);
+      }
+      const sensorData = sensorEntries.map((e) => JSON.stringify(e)).join("\n");
+      if (sensorData) {
+        writeFileAtomicSync(path.join(dir, "sensors.jsonl"), sensorData + "\n");
+      }
+
+      // Pattern entries — prune by lastSeen
+      let patternEntries = this.patterns.getAllEntries();
+      if (patternEntries.length > max) {
+        patternEntries = pruneByDate(patternEntries, max, (e) => e.lastSeen);
+        this.patterns.loadEntries(patternEntries);
+      }
+      const patternData = patternEntries.map((e) => JSON.stringify(e)).join("\n");
+      if (patternData) {
+        writeFileAtomicSync(path.join(dir, "patterns.jsonl"), patternData + "\n");
+      }
+    } catch {
+      // Persistence failure is non-fatal — data stays in memory
+    }
+  }
+
+  private load(): void {
+    const dir = this.config.dataDir;
+
+    // Load locators
+    const locatorEntries = this.readJsonl<LocatorEntry>(
+      path.join(dir, "locators.jsonl"),
+    );
+    if (locatorEntries.length > 0) {
+      this.locators.loadEntries(locatorEntries);
+    }
+
+    // Load recoveries
+    const recoveryEntries = this.readJsonl<RecoveryPolicyEntry>(
+      path.join(dir, "recoveries.jsonl"),
+    );
+    if (recoveryEntries.length > 0) {
+      this.recovery.loadEntries(recoveryEntries);
+    }
+
+    // Load timings
+    const timingSamples = this.readJsonl<TimingSample>(
+      path.join(dir, "timings.jsonl"),
+    );
+    if (timingSamples.length > 0) {
+      this.timing.loadSamples(timingSamples);
+    }
+
+    // Load sensors
+    const sensorEntries = this.readJsonl<SensorPolicyEntry>(
+      path.join(dir, "sensors.jsonl"),
+    );
+    if (sensorEntries.length > 0) {
+      this.sensors.loadEntries(sensorEntries);
+    }
+
+    // Load patterns
+    const patternEntries = this.readJsonl<PatternEntry>(
+      path.join(dir, "patterns.jsonl"),
+    );
+    if (patternEntries.length > 0) {
+      this.patterns.loadEntries(patternEntries);
+    }
+  }
+
+  private readJsonl<T>(filePath: string): T[] {
+    try {
+      if (!fs.existsSync(filePath)) return [];
+      const content = fs.readFileSync(filePath, "utf-8");
+      const results: T[] = [];
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          results.push(JSON.parse(trimmed) as T);
+        } catch {
+          // Skip corrupt lines
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+}

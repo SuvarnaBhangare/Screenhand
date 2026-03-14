@@ -156,6 +156,8 @@ class Program
                 Param<Dictionary<string, double>>(p, "region")),
             "cg.captureWindow" => _screenCapture.CaptureWindow(
                 RequiredParam<int>(p, "windowId")),
+            "cg.captureWindowBuffer" => _screenCapture.CaptureWindowBuffer(
+                RequiredParam<int>(p, "windowId")),
 
             // Vision (OCR)
             "vision.findText" => _screenCapture.FindText(
@@ -163,6 +165,9 @@ class Program
                 Param<string>(p, "searchText")),
             "vision.ocr" => _screenCapture.Ocr(
                 RequiredParam<string>(p, "imagePath")),
+            "vision.ocrRegion" => _screenCapture.OcrRegion(
+                RequiredParam<int>(p, "windowId"),
+                RequiredParam<Dictionary<string, double>>(p, "region")),
 
             _ => throw new BridgeException($"Unknown method: {method}"),
         };

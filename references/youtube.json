@@ -101,6 +101,16 @@
       "next_button": "ytcp-button:has-text('Next')",
       "publish_button": "ytcp-button:has-text('Publish')",
       "save_button": "ytcp-button:has-text('Save')"
+    },
+    "auto_discovered": {
+      "auto_mmlqct6w_t3h": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "auto_mmlqj53g_yjg": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "auto_mmltynml_8tr": "#radix-\\:rj\\:",
+      "auto_mmnbaf7v_pif": "[role='listbox'], [role='option']",
+      "auto_mmohtdue_1j6": "[data-sh-target=\"trial1-span\"]",
+      "auto_mmoi2jgn_rp8": ".ql-editor",
+      "auto_mmoi8jv6_agz": ".ql-editor",
+      "auto_mmoif5z4_r41": ".ql-editor"
     }
   },
   "detection": {
@@ -285,6 +295,18 @@
       "context": "AccessibilityAdapter attaches to frontmost app",
       "solution": "Use CDP browser tools — they work regardless of which app is frontmost.",
       "severity": "high"
+    },
+    {
+      "error": "Object couldn't be returned by value",
+      "context": "tool: browser_js, domain: labs.google",
+      "solution": "No resolution yet — investigate and update this entry",
+      "severity": "medium"
+    },
+    {
+      "error": "Chrome not running with --remote-debugging-port. Launch with: /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug",
+      "context": "tool: browser_tabs, domain: native:com.google.Chrome",
+      "solution": "No resolution yet — investigate and update this entry",
+      "severity": "medium"
     }
   ],
   "policyNotes": {

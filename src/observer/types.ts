@@ -98,7 +98,42 @@ export const DEFAULT_POPUP_PATTERNS: PopupPattern[] = [
   { pattern: "allow notifications", action: "click_deny", buttonText: "Don't Allow" },
 ];
 
+/** Command submitted to the observer daemon for targeted OCR */
+export interface ObserverCommand {
+  /** Unique command ID */
+  id: string;
+  /** Command type */
+  type: "ocr_roi";
+  /** Window to capture (uses daemon's windowId if omitted) */
+  windowId?: number;
+  /** Region of interest for OCR */
+  roi: { x: number; y: number; width: number; height: number };
+  /** Status lifecycle */
+  status: "pending" | "running" | "done" | "error";
+  /** ISO timestamp of when the command was submitted */
+  createdAt: string;
+  /** Result — populated when status is "done" */
+  result?: ObserverCommandResult;
+  /** Error message — populated when status is "error" */
+  error?: string;
+}
+
+/** Result of an OCR ROI command */
+export interface ObserverCommandResult {
+  /** Full OCR text from the region */
+  text: string;
+  /** Individual text regions with bounds (in window coordinates) */
+  regions: Array<{
+    text: string;
+    bounds: { x: number; y: number; width: number; height: number };
+  }>;
+  /** When the OCR was performed */
+  completedAt: string;
+}
+
 export const OBSERVER_DIR = path.join(os.homedir(), ".screenhand", "observer");
 export const OBSERVER_STATE_FILE = path.join(OBSERVER_DIR, "state.json");
+export const OBSERVER_COMMANDS_FILE = path.join(OBSERVER_DIR, "commands.json");
 export const OBSERVER_PID_FILE = path.join(OBSERVER_DIR, "observer.pid");
 export const OBSERVER_LOG_FILE = path.join(OBSERVER_DIR, "observer.log");
+export const CAPTURE_LOCK_FILE = path.join(OBSERVER_DIR, "capture.lock");

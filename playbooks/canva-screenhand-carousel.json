@@ -1,0 +1,445 @@
+{
+  "id": "canva-screenhand-carousel",
+  "name": "Canva — ScreenHand Carousel Rewrite",
+  "description": "Rewrite the currently open 4-page Canva tech carousel template into the ScreenHand marketing carousel. Assumes the Canva editor is already open in Chrome on a 4-page template similar to 'Black Purple Simple Tech Carousel Instagram Post'. Rewrites the main copy, updates small SH brand labels, and performs a few optional footer cleanups.",
+  "platform": "canva",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "https://www.canva.com/design/*/edit*"
+  ],
+  "tags": [
+    "canva",
+    "carousel",
+    "screenhand",
+    "marketing",
+    "template",
+    "chrome",
+    "cdp"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "preconditions": [
+    "location.hostname.includes('canva.com')",
+    "location.pathname.includes('/design/')",
+    "document.querySelectorAll('.wjS_DQ').length >= 4"
+  ],
+  "flows": {
+    "rewrite_screenhand_copy": {
+      "steps": [
+        "Install Canva helper in page context",
+        "Open each target text box in edit mode",
+        "Select existing text and type ScreenHand copy",
+        "Press Escape after each edit to return to canvas mode",
+        "Optionally normalize a few visible footer labels"
+      ],
+      "guards": [
+        "The Canva editor must already be open in Chrome",
+        "The target design must have at least 4 pages",
+        "This playbook expects the same template geometry used during capture"
+      ],
+      "why": "Canva text editing is not a normal input flow. Reliable replay requires entering the in-canvas ql-editor first, then typing only after edit mode is confirmed."
+    }
+  },
+  "errors": [
+    {
+      "error": "Center clicks land on Canva's floating toolbar instead of the text box",
+      "context": "Editing large headline blocks inside the canvas",
+      "solution": "This playbook double-clicks lower inside the target box and waits for the ql-editor to appear before typing.",
+      "severity": "high"
+    },
+    {
+      "error": "Typing before ql-editor exists does nothing",
+      "context": "Canva canvas mode vs true text-edit mode",
+      "solution": "Each open step polls for .ql-editor[contenteditable='true'] and selects its contents before browser_type runs.",
+      "severity": "high"
+    }
+  ],
+  "steps": [
+    {
+      "action": "browser_js",
+      "description": "Install Canva carousel helper and verify a 4-page editor is open",
+      "code": "(() => { const norm = (s) => (s || '').toLowerCase().replace(/\\s+/g, ' ').trim(); const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms)); const getScroller = () => Array.from(document.querySelectorAll('*')).find(el => { const s = getComputedStyle(el); return (s.overflowY === 'scroll' || s.overflowY === 'auto') && el.scrollHeight > el.clientHeight + 500; }) || null; const getPages = () => Array.from(document.querySelectorAll('.wjS_DQ')); const getPage = (pageNum) => getPages()[pageNum - 1] || null; const waitForEditor = async (timeoutMs = 4000) => { const start = Date.now(); while (Date.now() - start < timeoutMs) { const editor = document.querySelector('.ql-editor[contenteditable=\"true\"]'); if (editor) return editor; await wait(50); } return null; }; const selectEditorText = () => { const editor = document.querySelector('.ql-editor[contenteditable=\"true\"]'); if (!editor) throw new Error('No active ql-editor'); const range = document.createRange(); range.selectNodeContents(editor); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); editor.focus(); return (editor.innerText || editor.textContent || '').replace(/\\s+/g, ' ').trim(); }; const fireClickSequence = (x, y) => { const target = document.elementFromPoint(x, y) || document.body; const emit = (type, detail) => { const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent; target.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, detail, button: 0, buttons: 1, pointerType: 'mouse' })); }; emit('pointerdown', 1); emit('mousedown', 1); emit('pointerup', 1); emit('mouseup', 1); emit('click', 1); emit('pointerdown', 2); emit('mousedown', 2); emit('pointerup', 2); emit('mouseup', 2); emit('click', 2); emit('dblclick', 2); return target.tagName; }; const scrollPage = async (pageNum) => { const scroller = getScroller(); const page = getPage(pageNum); if (!scroller || !page) throw new Error(`Unable to find Canva scroller/page ${pageNum}`); scroller.scrollTop = page.offsetTop; await wait(250); return page.getBoundingClientRect(); }; const openByPointOnPage = async (pageNum, relX, relY) => { const pageRect = await scrollPage(pageNum); const x = Math.round(pageRect.x + relX); const y = Math.round(pageRect.y + relY); fireClickSequence(x, y); const editor = await waitForEditor(); if (!editor) throw new Error(`Failed to enter editor on page ${pageNum} at ${relX},${relY}`); return { page: pageNum, mode: 'point', selectedText: selectEditorText() }; }; const openByTextOnPage = async (pageNum, query, index = 0, yBias = 0.82) => { const pageRect = await scrollPage(pageNum); const nq = norm(query); const matches = Array.from(document.querySelectorAll('body *')).map(el => { const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim(); const rect = el.getBoundingClientRect(); return { el, text, ntext: norm(text), rect, area: rect.width * rect.height }; }).filter(m => m.ntext.includes(nq) && m.rect.width > 3 && m.rect.height > 3 && m.rect.top >= pageRect.top - 24 && m.rect.bottom <= pageRect.bottom + 24 && m.rect.left >= pageRect.left - 24 && m.rect.right <= pageRect.right + 24).sort((a, b) => a.area - b.area || a.rect.y - b.rect.y); const match = matches[index]; if (!match) throw new Error(`No match for \"${query}\" on page ${pageNum}`); const x = Math.round(match.rect.left + Math.min(Math.max(match.rect.width * 0.35, 12), match.rect.width - 12)); const y = Math.round(match.rect.top + Math.min(Math.max(match.rect.height * yBias, 8), match.rect.height - 4)); fireClickSequence(x, y); const editor = await waitForEditor(); if (!editor) throw new Error(`Failed to enter editor for \"${query}\" on page ${pageNum}`); return { page: pageNum, mode: 'text', query, selectedText: selectEditorText(), clicked: { x, y } }; }; window.__screenhandCanvaCarousel = { norm, wait, getScroller, getPages, getPage, scrollPage, waitForEditor, selectEditorText, openByPointOnPage, openByTextOnPage }; if (getPages().length < 4) throw new Error(`Expected at least 4 Canva pages, found ${getPages().length}`); return { ok: true, pages: getPages().length }; })()"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Exit any active text editor before starting",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+
+    {
+      "action": "browser_js",
+      "description": "Page 1: open the main headline box by fixed point",
+      "code": "window.__screenhandCanvaCarousel.openByPointOnPage(1, 116, 220)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 1: set headline to SCREENHAND",
+      "target": { "selector": ".ql-editor" },
+      "text": "SCREENHAND"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 1 headline edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 1: open the subtitle box by placeholder text",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(1, 'ddd', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 1: set subtitle to MCP AGENTS",
+      "target": { "selector": ".ql-editor" },
+      "text": "MCP AGENTS"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 1 subtitle edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 1: open the small brand label",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(1, 'brocelle tech', 0, 0.75)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 1: replace the small brand with SH",
+      "target": { "selector": ".ql-editor" },
+      "text": "SH"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 1 brand edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 1: open the left footer label",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(1, 'sdf', 0, 0.6)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 1: set left footer to screenhand.com",
+      "target": { "selector": ".ql-editor" },
+      "text": "screenhand.com",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 1 footer edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+
+    {
+      "action": "browser_js",
+      "description": "Page 2: open the top headline",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(2, 'let me tell you', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 2: set top headline to NATIVE DESKTOP",
+      "target": { "selector": ".ql-editor" },
+      "text": "NATIVE DESKTOP"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 2 headline edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 2: open the lower headline",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(2, 'check the next slide!', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 2: set lower headline to CONTROL FOR AI",
+      "target": { "selector": ".ql-editor" },
+      "text": "CONTROL FOR AI"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 2 lower headline edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 2: open the small brand label",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(2, 'brocelle tech', 0, 0.75)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 2: replace the small brand with SH",
+      "target": { "selector": ".ql-editor" },
+      "text": "SH",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 2 brand edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 2: open the left footer website",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(2, 'www.reallygreatsite.com', 0, 0.6)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 2: set left footer website to screenhand.com",
+      "target": { "selector": ".ql-editor" },
+      "text": "screenhand.com",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 2 footer edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+
+    {
+      "action": "browser_js",
+      "description": "Page 3: open the first feature bullet",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(3, 'the global ai market', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 3: set first feature bullet",
+      "target": { "selector": ".ql-editor" },
+      "text": "88 TOOLS FOR DESKTOP CONTROL"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 3 first bullet edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 3: open the second feature bullet",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(3, 'ai usage among desktop workers', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 3: set second feature bullet",
+      "target": { "selector": ".ql-editor" },
+      "text": "ACCESSIBILITY, CDP + OCR"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 3 second bullet edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 3: open the third feature bullet",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(3, 'an estimated 85 million jobs', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 3: set third feature bullet",
+      "target": { "selector": ".ql-editor" },
+      "text": "MEMORY, JOBS + PLAYBOOKS"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 3 third bullet edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 3: open the small brand label",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(3, 'brocelle tech', 0, 0.75)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 3: replace the small brand with SH",
+      "target": { "selector": ".ql-editor" },
+      "text": "SH",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 3 brand edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 3: open the left footer website",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(3, 'www.reallygreatsite.com', 0, 0.6)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 3: set left footer website to screenhand.com",
+      "target": { "selector": ".ql-editor" },
+      "text": "screenhand.com",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 3 footer edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+
+    {
+      "action": "browser_js",
+      "description": "Page 4: open the main CTA headline",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(4, 'still refusing to adapt to ai?', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 4: set CTA headline to REAL DESKTOP HANDS",
+      "target": { "selector": ".ql-editor" },
+      "text": "REAL DESKTOP HANDS"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 4 main CTA edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 4: open the lower CTA line",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(4, 'follow for more information!', 0, 0.82)"
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 4: set lower CTA line to SCREENHAND.COM",
+      "target": { "selector": ".ql-editor" },
+      "text": "SCREENHAND.COM"
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 4 lower CTA edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      }
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 4: open the small brand label",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(4, 'brocelle tech', 0, 0.75)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 4: replace the small brand with SH",
+      "target": { "selector": ".ql-editor" },
+      "text": "SH",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 4 brand edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+    {
+      "action": "browser_js",
+      "description": "Page 4: open the left footer website",
+      "code": "window.__screenhandCanvaCarousel.openByTextOnPage(4, 'www.reallygreatsite.com', 0, 0.6)",
+      "optional": true
+    },
+    {
+      "action": "browser_type",
+      "description": "Page 4: set left footer website to screenhand.com",
+      "target": { "selector": ".ql-editor" },
+      "text": "screenhand.com",
+      "optional": true
+    },
+    {
+      "action": "cdp_key_event",
+      "description": "Leave page 4 footer edit mode",
+      "keyEvent": {
+        "key": "Escape",
+        "code": "Escape",
+        "windowsVirtualKeyCode": 27
+      },
+      "optional": true
+    },
+
+    {
+      "action": "screenshot",
+      "description": "Capture the final Canva state",
+      "optional": true
+    }
+  ]
+}

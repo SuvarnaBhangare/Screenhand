@@ -49,10 +49,12 @@ import type { AppAdapter } from "./app-adapter.js";
 import { Executor } from "./executor.js";
 import { LocatorCache } from "./locator-cache.js";
 import { SessionManager } from "./session-manager.js";
+import type { WorldModel } from "../state/world-model.js";
 
 export class AutomationRuntimeService {
   private readonly sessions: SessionManager;
   private readonly executor: Executor;
+  private worldModel: WorldModel | null = null;
 
   constructor(
     private readonly adapter: AppAdapter,
@@ -63,19 +65,48 @@ export class AutomationRuntimeService {
     this.executor = new Executor(adapter, cache, logger);
   }
 
+  /**
+   * Inject the WorldModel so runtime actions update shared state.
+   */
+  setWorldModel(model: WorldModel): void {
+    this.worldModel = model;
+  }
+
   async sessionStart(profile = DEFAULT_PROFILE): Promise<SessionInfo> {
     return this.sessions.sessionStart(profile);
+  }
+
+  /**
+   * Ensure session exists (re-attaches if lost after MCP restart).
+   * Also reloads the world model from disk when re-attaching so world
+   * state survives across MCP server restarts.
+   */
+  private async ensureSession(sessionId: string): Promise<SessionInfo> {
+    const hadSession = !!this.sessions.getSession(sessionId);
+    const session = await this.sessions.requireSessionResilent(sessionId);
+    // If we had to re-attach, reload persisted world state
+    if (!hadSession && this.worldModel) {
+      this.worldModel.init(sessionId);
+    }
+    return session;
   }
 
   async navigate(input: NavigateInput): Promise<ToolResult<PageMeta>> {
     const telemetry = this.logger.start("navigate", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       const page = await this.adapter.navigate(
         input.sessionId,
         input.url,
         input.timeoutMs ?? DEFAULT_NAVIGATE_TIMEOUT_MS,
       );
+      // Feed navigation result to world model for domain state tracking
+      if (this.worldModel) {
+        const bundleId = this.worldModel.getState().focusedApp?.bundleId;
+        if (bundleId) {
+          this.worldModel.ingestCDPSnapshot(bundleId, input.url, page.title ?? "");
+        }
+      }
       return {
         ok: true,
         data: page,
@@ -96,7 +127,7 @@ export class AutomationRuntimeService {
   async waitFor(input: WaitForInput): Promise<ToolResult<{ matched: boolean }>> {
     const telemetry = this.logger.start("wait_for", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       const matched = await this.adapter.waitFor(
         input.sessionId,
         input.condition,
@@ -120,19 +151,19 @@ export class AutomationRuntimeService {
   }
 
   async press(input: PressInput): Promise<ToolResult<PageMeta>> {
-    await this.sessions.requireSessionResilent(input.sessionId);
+    await this.ensureSession(input.sessionId);
     return this.executor.press(input);
   }
 
   async typeInto(input: TypeIntoInput): Promise<ToolResult<PageMeta>> {
-    await this.sessions.requireSessionResilent(input.sessionId);
+    await this.ensureSession(input.sessionId);
     return this.executor.typeInto(input);
   }
 
   async extract(input: ExtractInput): Promise<ToolResult<unknown>> {
     const telemetry = this.logger.start("extract", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       const data = await this.adapter.extract(
         input.sessionId,
         input.target,
@@ -158,7 +189,7 @@ export class AutomationRuntimeService {
   async screenshot(input: ScreenshotInput): Promise<ToolResult<{ path: string }>> {
     const telemetry = this.logger.start("screenshot", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       const path = await this.adapter.screenshot(input.sessionId, input.region);
       return {
         ok: true,
@@ -182,11 +213,12 @@ export class AutomationRuntimeService {
   async appLaunch(input: AppLaunchInput): Promise<ToolResult<AppContext>> {
     const telemetry = this.logger.start("app_launch", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.launchApp) {
         throw new Error("Adapter does not support launchApp");
       }
       const ctx = await this.adapter.launchApp(input.sessionId, input.bundleId);
+      this.worldModel?.updateFocusedApp(ctx);
       return {
         ok: true,
         data: ctx,
@@ -207,11 +239,17 @@ export class AutomationRuntimeService {
   async appFocus(input: AppFocusInput): Promise<ToolResult<void>> {
     const telemetry = this.logger.start("app_focus", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.focusApp) {
         throw new Error("Adapter does not support focusApp");
       }
       await this.adapter.focusApp(input.sessionId, input.bundleId);
+      this.worldModel?.updateFocusedApp({
+        bundleId: input.bundleId,
+        appName: input.bundleId,
+        pid: 0,
+        windowTitle: "",
+      });
       return {
         ok: true,
         data: undefined,
@@ -232,7 +270,7 @@ export class AutomationRuntimeService {
   async appList(sessionId: string): Promise<ToolResult<RunningApp[]>> {
     const telemetry = this.logger.start("app_list", sessionId);
     try {
-      await this.sessions.requireSessionResilent(sessionId);
+      await this.ensureSession(sessionId);
       if (!this.adapter.listApps) {
         throw new Error("Adapter does not support listApps");
       }
@@ -257,7 +295,7 @@ export class AutomationRuntimeService {
   async windowList(sessionId: string): Promise<ToolResult<WindowInfo[]>> {
     const telemetry = this.logger.start("window_list", sessionId);
     try {
-      await this.sessions.requireSessionResilent(sessionId);
+      await this.ensureSession(sessionId);
       if (!this.adapter.listWindows) {
         throw new Error("Adapter does not support listWindows");
       }
@@ -282,7 +320,7 @@ export class AutomationRuntimeService {
   async menuClick(input: MenuClickInput): Promise<ToolResult<void>> {
     const telemetry = this.logger.start("menu_click", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.menuClick) {
         throw new Error("Adapter does not support menuClick");
       }
@@ -307,7 +345,7 @@ export class AutomationRuntimeService {
   async keyCombo(input: KeyComboInput): Promise<ToolResult<void>> {
     const telemetry = this.logger.start("key_combo", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.keyCombo) {
         throw new Error("Adapter does not support keyCombo");
       }
@@ -332,7 +370,7 @@ export class AutomationRuntimeService {
   async elementTree(input: ElementTreeInput): Promise<ToolResult<AXNode>> {
     const telemetry = this.logger.start("element_tree", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.elementTree) {
         throw new Error("Adapter does not support elementTree");
       }
@@ -361,7 +399,7 @@ export class AutomationRuntimeService {
   async drag(input: DragInput): Promise<ToolResult<void>> {
     const telemetry = this.logger.start("drag", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.drag) {
         throw new Error("Adapter does not support drag");
       }
@@ -391,7 +429,7 @@ export class AutomationRuntimeService {
   async scroll(input: ScrollInput): Promise<ToolResult<void>> {
     const telemetry = this.logger.start("scroll", input.sessionId);
     try {
-      await this.sessions.requireSessionResilent(input.sessionId);
+      await this.ensureSession(input.sessionId);
       if (!this.adapter.scroll) {
         throw new Error("Adapter does not support scroll");
       }

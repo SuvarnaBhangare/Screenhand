@@ -15,11 +15,36 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with ScreenHand. If not, see <https://www.gnu.org/licenses/>.
 
+import type { LearningEngine } from "../learning/engine.js";
+
 export class LocatorCache {
   private readonly store = new Map<string, string>();
+  private learningEngine: LearningEngine | null = null;
+
+  /**
+   * Inject the learning engine for fallback on cache miss.
+   * Called after both are constructed to avoid circular dependencies.
+   */
+  setLearningEngine(engine: LearningEngine): void {
+    this.learningEngine = engine;
+  }
 
   get(siteKey: string, actionKey: string): string | undefined {
-    return this.store.get(this.key(siteKey, actionKey));
+    // 1. Check in-memory cache first
+    const cached = this.store.get(this.key(siteKey, actionKey));
+    if (cached) return cached;
+
+    // 2. Fallback: ask learning engine for a proven locator
+    if (this.learningEngine) {
+      const learned = this.learningEngine.recommendLocator(siteKey, actionKey);
+      if (learned) {
+        // Promote to cache for fast subsequent lookups
+        this.store.set(this.key(siteKey, actionKey), learned.locator);
+        return learned.locator;
+      }
+    }
+
+    return undefined;
   }
 
   set(siteKey: string, actionKey: string, locator: string): void {

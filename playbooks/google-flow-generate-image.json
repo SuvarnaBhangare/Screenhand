@@ -1,0 +1,68 @@
+{
+  "id": "google-flow-generate-image",
+  "name": "Google Flow — Generate Image",
+  "description": "Open a Flow project, switch the internal prompt store to IMAGE mode, insert {PROMPT_TEXT} into Flow's Slate text editor, and submit through the prompt tray's internal onSubmit handler. If {PROJECT_NAME} is omitted, the first visible project is used.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "image",
+    "generate"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for dashboard project cards"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawWanted = `{PROJECT_NAME}`.trim(); const wanted = rawWanted.toLowerCase(); const hasWanted = !!rawWanted && rawWanted !== '{PROJECT_NAME}'; const links = [...document.querySelectorAll(\"a[href*='/fx/tools/flow/project/']\")].filter(visible); if (!links.length) throw new Error('No Flow project cards found'); const pick = hasWanted ? links.find(link => ((link.closest('div')?.textContent || link.parentElement?.textContent || '')).toLowerCase().includes(wanted)) : links[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error(hasWanted ? `Flow project not found: ${rawWanted}` : 'No clickable Flow project found'); const url = pick.href || pick.getAttribute('href'); if (!url) throw new Error('Project card is missing href'); window.location.assign(url); return url; })()",
+      "description": "Open the matching project card",
+      "verify": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "description": "Allow the prompt panel to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const editorEl = document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\"); if (!(editorEl instanceof HTMLElement)) throw new Error('Flow prompt box not found'); const fiberKey = Object.keys(editorEl).find(k => k.startsWith('__reactFiber')); let cur = fiberKey ? editorEl[fiberKey] : null; let store = null; for (let i = 0; cur && i < 9; i++, cur = cur.return) { if (i === 7) { store = cur.memoizedProps?.promptBoxStore; break; } } const state = store?.getState?.(); const actions = state?.actions; if (!actions) throw new Error('Flow prompt store actions not found'); const aspectRaw = `{ASPECT_RATIO}`.trim(); const aspect = aspectRaw && aspectRaw !== '{ASPECT_RATIO}' ? aspectRaw.toUpperCase() : 'LANDSCAPE'; const outputsRaw = `{OUTPUT_COUNT}`.trim(); const outputs = outputsRaw && outputsRaw !== '{OUTPUT_COUNT}' ? Number(outputsRaw) : 1; actions.setMode('IMAGE'); if (typeof actions.setAspectRatio === 'function') actions.setAspectRatio(aspect === 'PORTRAIT' ? 'PORTRAIT' : 'LANDSCAPE'); if (typeof actions.setOutputsPerPrompt === 'function' && Number.isFinite(outputs) && outputs >= 1) actions.setOutputsPerPrompt(outputs); return JSON.stringify({ mode: store.getState().mode, aspectRatio: store.getState().aspectRatio, outputsPerPrompt: store.getState().outputsPerPrompt }); })()",
+      "description": "Set Flow to IMAGE mode through the internal prompt store"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const prompt = `{PROMPT_TEXT}`.trim(); if (!prompt || prompt === '{PROMPT_TEXT}') throw new Error('PROMPT_TEXT variable is required'); const editorEl = document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\"); if (!(editorEl instanceof HTMLElement)) throw new Error('Flow prompt box not found'); const fiberKey = Object.keys(editorEl).find(k => k.startsWith('__reactFiber')); let cur = fiberKey ? editorEl[fiberKey] : null; let store = null; for (let i = 0; cur && i < 9; i++, cur = cur.return) { if (i === 7) { store = cur.memoizedProps?.promptBoxStore; break; } } const textEditor = store?.getState?.().inputs?.textEditor; if (!textEditor) throw new Error('Flow text editor not found'); const currentText = textEditor.children?.[0]?.children?.[0]?.text ?? ''; try { textEditor.select({ anchor: { path: [0, 0], offset: 0 }, focus: { path: [0, 0], offset: currentText.length } }); } catch {} try { textEditor.deleteFragment(); } catch {} textEditor.insertText(prompt); try { textEditor.onChange(); } catch {} const text = (textEditor.children || []).map(node => (node.children || []).map(child => child.text || '').join('')).join('\\n'); window.__flowPromptText = text; return JSON.stringify({ prompt: text, mode: store.getState().mode, aspectRatio: store.getState().aspectRatio }); })()",
+      "description": "Insert the generation prompt through Flow's internal Slate editor"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const uniqueTiles = () => [...new Set([...document.querySelectorAll('[data-tile-id]')].map(el => el.getAttribute('data-tile-id')).filter(Boolean))]; const submitButton = [...document.querySelectorAll('button')].find(el => (el.textContent || '').includes('arrow_forward') && (el.textContent || '').includes('Create')); if (!(submitButton instanceof HTMLElement)) throw new Error('Flow submit button not found'); const fiberKey = Object.keys(submitButton).find(k => k.startsWith('__reactFiber')); let cur = fiberKey ? submitButton[fiberKey] : null; let onSubmit = null; for (let i = 0; cur && i < 6; i++, cur = cur.return) { if (i === 5) { onSubmit = cur.memoizedProps?.onSubmit; break; } } if (typeof onSubmit !== 'function') throw new Error('Flow internal onSubmit handler not found'); window.__flowSubmitBaseline = { tileCount: uniqueTiles().length, resourceCount: performance.getEntriesByType('resource').length }; onSubmit(); return JSON.stringify(window.__flowSubmitBaseline); })()",
+      "description": "Submit through Flow's internal prompt tray handler"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const baseline = window.__flowSubmitBaseline || { tileCount: 0, resourceCount: 0 }; const uniqueTiles = () => [...new Set([...document.querySelectorAll('[data-tile-id]')].map(el => el.getAttribute('data-tile-id')).filter(Boolean))]; const hasGenerationRequest = () => performance.getEntriesByType('resource').slice(baseline.resourceCount).some(entry => /flowMedia:batchGenerateImages|flowWorkflows\\//.test(entry.name)); const start = Date.now(); return new Promise(resolve => { const check = () => { const tileCount = uniqueTiles().length; if (tileCount > baseline.tileCount || hasGenerationRequest()) { resolve(JSON.stringify({ submitted: true, tileCount, baselineTileCount: baseline.tileCount, generationRequestSeen: hasGenerationRequest() })); return; } if (Date.now() - start > 30000) { resolve(JSON.stringify({ submitted: false, tileCount, baselineTileCount: baseline.tileCount, generationRequestSeen: false })); return; } setTimeout(check, 1000); }; check(); }); })()",
+      "description": "Wait for Flow to create an image generation request or a new tile"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the project after submission",
+      "optional": true
+    }
+  ]
+}

@@ -276,6 +276,31 @@ class CoreGraphicsBridge {
         return ["path": fileURL.path, "width": cgImage.width, "height": cgImage.height]
     }
 
+    /// Capture a window and return the image as an in-memory base64 PNG string.
+    /// Avoids disk I/O — useful for high-frequency perception (vision diffs).
+    func captureWindowBuffer(windowId: Int) throws -> [String: Any] {
+        return try timedCapture(timeoutSec: 5) {
+            guard let image = CGWindowListCreateImage(
+                .null, .optionIncludingWindow, CGWindowID(windowId), .bestResolution
+            ) else {
+                throw BridgeError.general("CGWindowListCreateImage returned nil for window \(windowId)")
+            }
+
+            // Encode CGImage → PNG Data in memory (no temp file)
+            let mutableData = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(mutableData as CFMutableData, "public.png" as CFString, 1, nil) else {
+                throw BridgeError.general("Failed to create in-memory image destination")
+            }
+            CGImageDestinationAddImage(dest, image, nil)
+            guard CGImageDestinationFinalize(dest) else {
+                throw BridgeError.general("Failed to encode PNG to memory buffer")
+            }
+
+            let base64 = (mutableData as Data).base64EncodedString()
+            return ["base64": base64, "width": image.width, "height": image.height]
+        }
+    }
+
     private func saveImage(_ image: CGImage) throws -> String {
         let tempDir = FileManager.default.temporaryDirectory
         let fileName = "bridge_screenshot_\(UUID().uuidString).png"

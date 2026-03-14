@@ -47,7 +47,9 @@ const METHOD_TIMEOUTS: Record<string, number> = {
   "app.launch": 30_000,
   "cg.captureScreen": 15_000,
   "cg.captureWindow": 15_000,
+  "cg.captureWindowBuffer": 15_000,
   "vision.ocr": 20_000,
+  "vision.ocrRegion": 20_000,
   "vision.findText": 20_000,
 };
 

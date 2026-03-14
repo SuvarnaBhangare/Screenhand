@@ -1,0 +1,100 @@
+{
+  "id": "meta-ad-library-competitor-research",
+  "name": "Meta Ad Library — Competitor Research",
+  "description": "Open Meta Ad Library in India all-ads mode, search an advertiser page, and extract active campaign snippets.",
+  "platform": "meta-ad-library",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*facebook.com/ads/library*"
+  ],
+  "tags": [
+    "meta",
+    "facebook",
+    "ads-library",
+    "competitor-research",
+    "browser",
+    "cdp"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "home": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=IN&is_targeted_country=false&media_type=all&search_type=keyword_unordered&sort_data[direction]=desc&sort_data[mode]=total_impressions"
+  },
+  "selectors": {
+    "search": {
+      "input": "input[placeholder='Search by keyword or advertiser']",
+      "suggestions": "[role='listbox']",
+      "page_option": "li[id^='pageID:'], [role='option']"
+    }
+  },
+  "flows": {
+    "advertiser_lookup": {
+      "steps": [
+        "Open the India all-ads library",
+        "Type the advertiser name",
+        "Click the matching advertiser suggestion",
+        "Extract results count, Library IDs, and visible ad snippets"
+      ],
+      "guards": [
+        "Use advertiser lookup first",
+        "Keep ad_type=all in the URL"
+      ],
+      "why": "This is the highest-signal Meta workflow for active competitor campaign review."
+    }
+  },
+  "detection": {
+    "on_library": "location.hostname.includes('facebook.com') && location.pathname.includes('/ads/library')"
+  },
+  "errors": [
+    {
+      "error": "keyword-only research undercounts advertisers",
+      "context": "Many brands do not lead copy with the category keyword",
+      "solution": "Run this playbook with ADVERTISER set to the page name and use keyword searches separately.",
+      "severity": "medium"
+    }
+  ],
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=IN&is_targeted_country=false&media_type=all&search_type=keyword_unordered&sort_data[direction]=desc&sort_data[mode]=total_impressions",
+      "description": "Open Meta Ad Library in India all-ads mode",
+      "verify": "input[placeholder='Search by keyword or advertiser']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Let the library UI settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const input = document.querySelector(\"input[placeholder='Search by keyword or advertiser']\"); if (!(input instanceof HTMLInputElement)) throw new Error('Meta Ad Library search input not found'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; if (!setter) throw new Error('HTMLInputElement value setter unavailable'); setter.call(input, `{ADVERTISER}`); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); input.focus(); return { typed: input.value }; })()",
+      "description": "Type the advertiser page name"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for advertiser suggestions"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const wanted = `{ADVERTISER}`.trim().toLowerCase(); const option = [...document.querySelectorAll(\"li[id^='pageID:'], [role='option']\")].find((el) => (el.innerText || '').toLowerCase().includes(wanted)); if (!option) throw new Error(`Advertiser option not found: ${wanted}`); option.click(); return { clicked: (option.innerText || '').trim() }; })()",
+      "description": "Open the matching advertiser page"
+    },
+    {
+      "action": "wait",
+      "ms": 2500,
+      "description": "Wait for advertiser results to load"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const text = document.body.innerText; const results = text.match(/~\\d+ results/)?.[0] || null; const snippets = text.split(/Active\\nLibrary ID:/).slice(1, 7).map((chunk) => (`Library ID:${chunk}`).slice(0, 1400)); return { advertiser: `{ADVERTISER}`, url: location.href, results, snippets }; })()",
+      "description": "Extract visible active ad snippets and result count"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the advertiser results page",
+      "optional": true
+    }
+  ]
+}

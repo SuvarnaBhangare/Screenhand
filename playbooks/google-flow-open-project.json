@@ -1,0 +1,48 @@
+{
+  "id": "google-flow-open-project",
+  "name": "Google Flow — Open Project",
+  "description": "Open a Google Flow project from the dashboard. If {PROJECT_NAME} is provided, the playbook opens the first card whose container text matches it; otherwise it opens the first visible project.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "project",
+    "open"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for dashboard project cards"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawWanted = `{PROJECT_NAME}`.trim(); const wanted = rawWanted.toLowerCase(); const hasWanted = !!rawWanted && rawWanted !== '{PROJECT_NAME}'; const links = [...document.querySelectorAll(\"a[href*='/fx/tools/flow/project/']\")].filter(visible); if (!links.length) throw new Error('No Flow project cards found'); const pick = hasWanted ? links.find(link => ((link.closest('div')?.textContent || link.parentElement?.textContent || '')).toLowerCase().includes(wanted)) : links[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error(hasWanted ? `Flow project not found: ${rawWanted}` : 'No clickable Flow project found'); const url = pick.href || pick.getAttribute('href'); if (!url) throw new Error('Project card is missing href'); window.location.assign(url); return url; })()",
+      "description": "Open the matching project card",
+      "verify": "input[aria-label='Editable text']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Allow the project editor to settle"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the open project editor",
+      "optional": true
+    }
+  ]
+}

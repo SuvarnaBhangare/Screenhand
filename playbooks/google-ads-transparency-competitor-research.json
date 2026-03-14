@@ -1,0 +1,89 @@
+{
+  "id": "google-ads-transparency-competitor-research",
+  "name": "Google Ads Transparency — Competitor Research",
+  "description": "Open the Google Ads Transparency Center for a domain in India and extract active ad counts, advertiser labels, and creative links.",
+  "platform": "google-ads-transparency",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*adstransparency.google.com*"
+  ],
+  "tags": [
+    "google",
+    "ads-transparency",
+    "competitor-research",
+    "browser",
+    "cdp"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "domain_lookup": "https://adstransparency.google.com/?region=IN&domain={DOMAIN}"
+  },
+  "selectors": {
+    "results": {
+      "search_input": "input.input.input-area",
+      "creative_cards": "a[href*='/advertiser/'][href*='/creative/']",
+      "see_all_ads_button": "material-button.grid-expansion-button"
+    }
+  },
+  "flows": {
+    "domain_lookup": {
+      "steps": [
+        "Open the domain URL directly",
+        "Expand See all ads if available",
+        "Extract ad count, advertiser labels, and creative links"
+      ],
+      "guards": [
+        "Use DOMAIN as the landing-page domain, not the brand name"
+      ],
+      "why": "Direct domain URLs are more stable than homepage search interaction."
+    }
+  },
+  "detection": {
+    "on_ads_transparency": "location.hostname.includes('adstransparency.google.com')"
+  },
+  "errors": [
+    {
+      "error": "the page confirms inventory, not conversion metrics",
+      "context": "Google Ads Transparency does not expose performance data",
+      "solution": "Use count, repetition, and landing-page fit as outside signals.",
+      "severity": "medium"
+    }
+  ],
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://adstransparency.google.com/?region=IN&domain={DOMAIN}",
+      "description": "Open the Ads Transparency Center for the domain",
+      "verify": "input.input.input-area",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for the domain results page"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const button = [...document.querySelectorAll('material-button, button, [role=\"button\"]')].find((el) => (el.innerText || '').includes('See all ads')); if (!button) return { expanded: false }; button.click(); return { expanded: true }; })()",
+      "description": "Expand the ad grid when See all ads is available",
+      "optional": true
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Allow the grid to settle after expansion",
+      "optional": true
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const text = document.body.innerText; const adCount = text.match(/\\b\\d+ ads\\b/i)?.[0] || null; const advertisers = [...new Set([...document.querySelectorAll(\"a[href*='/advertiser/']\")].map((el) => (el.textContent || '').trim()).filter(Boolean))].slice(0, 10); const creativeLinks = [...document.querySelectorAll(\"a[href*='/advertiser/'][href*='/creative/']\")].map((el) => el.href).slice(0, 20); return { domain: `{DOMAIN}`, url: location.href, adCount, advertisers, creativeLinks }; })()",
+      "description": "Extract ad count, advertiser labels, and creative links"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the Google ad results page",
+      "optional": true
+    }
+  ]
+}

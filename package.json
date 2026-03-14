@@ -25,6 +25,7 @@
     "build:native:windows": "cd native/windows-bridge && dotnet build -c Release",
     "test": "vitest run",
     "test:watch": "vitest",
+    "export:help-md": "tsx scripts/export-help-center.ts",
     "codex:monitor": "tsx scripts/codex-monitor-daemon.ts",
     "codex:watch": "node scripts/vscode-codex-watch.mjs"
   },

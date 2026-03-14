@@ -158,6 +158,130 @@ class ScreenCapture
     }
 
     /// <summary>
+    /// Capture a specific window in-memory, return base64 PNG (no disk I/O).
+    /// Equivalent to macOS captureWindowBuffer.
+    /// </summary>
+    public Dictionary<string, object> CaptureWindowBuffer(int windowId)
+    {
+        var hWnd = new IntPtr(windowId);
+        GetWindowRect(hWnd, out RECT rect);
+
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+
+        if (width <= 0 || height <= 0)
+            throw new BridgeException($"Window {windowId} has invalid dimensions");
+
+        using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+
+        var hdc = graphics.GetHdc();
+        bool success = PrintWindow(hWnd, hdc, PW_RENDERFULLCONTENT);
+        graphics.ReleaseHdc(hdc);
+
+        if (!success)
+        {
+            graphics.CopyFromScreen(rect.Left, rect.Top, 0, 0,
+                new Size(width, height), CopyPixelOperation.SourceCopy);
+        }
+
+        using var ms = new MemoryStream();
+        bitmap.Save(ms, ImageFormat.Png);
+        var base64 = Convert.ToBase64String(ms.ToArray());
+
+        return new Dictionary<string, object>
+        {
+            ["base64"] = base64,
+            ["width"] = width,
+            ["height"] = height,
+        };
+    }
+
+    /// <summary>
+    /// OCR a specific region of a window. Captures window, crops to ROI, runs OCR,
+    /// then translates bounds back to window coordinates.
+    /// Equivalent to macOS vision.ocrRegion.
+    /// </summary>
+    public Dictionary<string, object> OcrRegion(int windowId, Dictionary<string, double> region)
+    {
+        var hWnd = new IntPtr(windowId);
+        GetWindowRect(hWnd, out RECT rect);
+
+        int winWidth = rect.Right - rect.Left;
+        int winHeight = rect.Bottom - rect.Top;
+
+        if (winWidth <= 0 || winHeight <= 0)
+            throw new BridgeException($"Window {windowId} has invalid dimensions");
+
+        int roiX = (int)region.GetValueOrDefault("x", 0);
+        int roiY = (int)region.GetValueOrDefault("y", 0);
+        int roiW = (int)region.GetValueOrDefault("width", winWidth);
+        int roiH = (int)region.GetValueOrDefault("height", winHeight);
+
+        // Clamp ROI to window bounds
+        roiX = Math.Max(0, Math.Min(roiX, winWidth));
+        roiY = Math.Max(0, Math.Min(roiY, winHeight));
+        roiW = Math.Min(roiW, winWidth - roiX);
+        roiH = Math.Min(roiH, winHeight - roiY);
+
+        if (roiW <= 0 || roiH <= 0)
+            throw new BridgeException("ROI has zero or negative area after clamping");
+
+        // Capture full window
+        using var fullBitmap = new Bitmap(winWidth, winHeight, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(fullBitmap))
+        {
+            var hdc = graphics.GetHdc();
+            bool success = PrintWindow(hWnd, hdc, PW_RENDERFULLCONTENT);
+            graphics.ReleaseHdc(hdc);
+
+            if (!success)
+            {
+                graphics.CopyFromScreen(rect.Left, rect.Top, 0, 0,
+                    new Size(winWidth, winHeight), CopyPixelOperation.SourceCopy);
+            }
+        }
+
+        // Crop to ROI
+        using var cropped = fullBitmap.Clone(
+            new Rectangle(roiX, roiY, roiW, roiH), fullBitmap.PixelFormat);
+
+        // Save cropped to temp file for OCR
+        var tempPath = Path.Combine(_tempDir, $"ocr_region_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.png");
+        cropped.Save(tempPath, ImageFormat.Png);
+
+        try
+        {
+            var ocrResult = Ocr(tempPath);
+
+            // Translate bounds back to window coordinates
+            if (ocrResult["regions"] is List<object> regions)
+            {
+                foreach (var regionObj in regions)
+                {
+                    if (regionObj is Dictionary<string, object> entry &&
+                        entry["bounds"] is Dictionary<string, object> bounds)
+                    {
+                        bounds["x"] = (double)bounds["x"] + roiX;
+                        bounds["y"] = (double)bounds["y"] + roiY;
+                    }
+                }
+            }
+
+            ocrResult["roiX"] = roiX;
+            ocrResult["roiY"] = roiY;
+            ocrResult["roiWidth"] = roiW;
+            ocrResult["roiHeight"] = roiH;
+
+            return ocrResult;
+        }
+        finally
+        {
+            try { File.Delete(tempPath); } catch { /* best-effort cleanup */ }
+        }
+    }
+
+    /// <summary>
     /// OCR an image file. Uses Windows.Media.Ocr when available, falls back to basic implementation.
     /// </summary>
     public Dictionary<string, object> Ocr(string imagePath)

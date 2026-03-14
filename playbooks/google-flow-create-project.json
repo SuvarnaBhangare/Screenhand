@@ -1,0 +1,59 @@
+{
+  "id": "google-flow-create-project",
+  "name": "Google Flow — Create Project",
+  "description": "Open the Google Flow dashboard, create a new project, and optionally rename it with {PROJECT_TITLE}. If {PROJECT_TITLE} is omitted, the auto-generated Flow title is kept.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "project",
+    "create"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for the dashboard to load"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const close = [...document.querySelectorAll('button,[role=\"button\"]')].find(el => /close/i.test((el.textContent || '').trim())); if (close instanceof HTMLElement) { close.click(); return 'dismissed banner'; } return 'no banner'; })()",
+      "description": "Dismiss the launch banner if it is visible",
+      "optional": true
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const button = [...document.querySelectorAll('button,[role=\"button\"]')].filter(visible).find(el => (el.textContent || '').replace(/\\s+/g, ' ').includes('New project')); if (!(button instanceof HTMLElement)) throw new Error('New project button not found'); button.click(); return 'clicked New project'; })()",
+      "description": "Create a new Flow project",
+      "verify": "input[aria-label='Editable text']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Allow the project editor to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const raw = `{PROJECT_TITLE}`.trim(); if (!raw || raw === '{PROJECT_TITLE}') return 'kept generated title'; const input = document.querySelector(\"input[aria-label='Editable text']\"); if (!(input instanceof HTMLInputElement)) throw new Error('Project title input not found'); input.focus(); input.value = ''; input.value = raw; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); input.blur(); return input.value; })()",
+      "description": "Rename the project if PROJECT_TITLE was provided"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the new project editor",
+      "optional": true
+    }
+  ]
+}

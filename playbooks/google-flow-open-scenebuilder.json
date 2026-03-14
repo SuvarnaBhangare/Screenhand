@@ -1,0 +1,64 @@
+{
+  "id": "google-flow-open-scenebuilder",
+  "name": "Google Flow — Open Scenebuilder",
+  "description": "Open a Flow project and switch into Scenebuilder. If {PROJECT_NAME} is omitted, the first visible project is used. This playbook stages scene work but does not reorder clips because the current playbook engine has no drag step.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "scene",
+    "scenebuilder"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for dashboard project cards"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawWanted = `{PROJECT_NAME}`.trim(); const wanted = rawWanted.toLowerCase(); const hasWanted = !!rawWanted && rawWanted !== '{PROJECT_NAME}'; const links = [...document.querySelectorAll(\"a[href*='/fx/tools/flow/project/']\")].filter(visible); if (!links.length) throw new Error('No Flow project cards found'); const pick = hasWanted ? links.find(link => ((link.closest('div')?.textContent || link.parentElement?.textContent || '')).toLowerCase().includes(wanted)) : links[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error(hasWanted ? `Flow project not found: ${rawWanted}` : 'No clickable Flow project found'); const url = pick.href || pick.getAttribute('href'); if (!url) throw new Error('Project card is missing href'); window.location.assign(url); return url; })()",
+      "description": "Open the matching project card",
+      "verify": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 600,
+      "description": "Allow the project toolbar to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const button = [...document.querySelectorAll('button,[role=\"button\"]')].filter(visible).find(el => (el.textContent || '').replace(/\\s+/g, ' ').includes('Scenebuilder')); if (!(button instanceof HTMLElement)) throw new Error('Scenebuilder button not found'); button.click(); return 'opened Scenebuilder'; })()",
+      "description": "Switch the project into Scenebuilder mode"
+    },
+    {
+      "action": "wait",
+      "ms": 1000,
+      "description": "Allow Scenebuilder to render"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const button = [...document.querySelectorAll('button,[role=\"button\"]')].filter(visible).find(el => (el.textContent || '').replace(/\\s+/g, ' ').includes('Arrange')); if (!(button instanceof HTMLElement)) return 'Arrange not visible'; button.click(); return 'opened Arrange'; })()",
+      "description": "Open Arrange if it is available in the current scene",
+      "optional": true
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the Scenebuilder state",
+      "optional": true
+    }
+  ]
+}

@@ -29,6 +29,51 @@ class VisionBridge {
         ]
     }
 
+    /// OCR a specific region of a window — captures the window, crops to the ROI,
+    /// and runs text recognition on just that region. Returns bounds in window coordinates.
+    func ocrRegion(windowId: Int, region: [String: Double]) throws -> [String: Any] {
+        let roiX = region["x"] ?? 0
+        let roiY = region["y"] ?? 0
+        let roiW = region["width"] ?? 0
+        let roiH = region["height"] ?? 0
+
+        // Capture the full window
+        guard let fullImage = CGWindowListCreateImage(
+            .null, .optionIncludingWindow, CGWindowID(windowId), .bestResolution
+        ) else {
+            throw BridgeError.general("CGWindowListCreateImage returned nil for window \(windowId)")
+        }
+
+        // Crop to the ROI (CGImage coordinates have origin top-left, same as our ROI)
+        let cropRect = CGRect(x: roiX, y: roiY, width: roiW, height: roiH)
+            .intersection(CGRect(x: 0, y: 0, width: fullImage.width, height: fullImage.height))
+
+        guard !cropRect.isEmpty,
+              let cropped = fullImage.cropping(to: cropRect) else {
+            return ["text": "", "regions": [] as [Any]]
+        }
+
+        // Run OCR on cropped image
+        let results = try performOCROnImage(cropped)
+
+        // Translate bounds from cropped-image coordinates back to window coordinates
+        let adjustedResults: [[String: Any]] = results.map { entry in
+            var adjusted = entry
+            if var bounds = entry["bounds"] as? [String: Double] {
+                bounds["x"] = (bounds["x"] ?? 0) + roiX
+                bounds["y"] = (bounds["y"] ?? 0) + roiY
+                adjusted["bounds"] = bounds
+            }
+            return adjusted
+        }
+
+        let fullText = adjustedResults.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        return [
+            "text": fullText,
+            "regions": adjustedResults,
+        ]
+    }
+
     private func performOCR(imagePath: String) throws -> [[String: Any]] {
         let url = URL(fileURLWithPath: imagePath)
 
@@ -37,6 +82,10 @@ class VisionBridge {
             throw BridgeError.general("Failed to load image at \(imagePath)")
         }
 
+        return try performOCROnImage(cgImage)
+    }
+
+    private func performOCROnImage(_ cgImage: CGImage) throws -> [[String: Any]] {
         let imageWidth = CGFloat(cgImage.width)
         let imageHeight = CGFloat(cgImage.height)
 

@@ -1,0 +1,191 @@
+{
+  "id": "google-flow-generate-video",
+  "name": "Google Flow — Generate Video",
+  "description": "Open a Flow project, select video settings (model, aspect ratio, generation mode) through UI tab clicks, type {PROMPT_TEXT} via keyboard into the Slate editor, and submit by clicking the Create button. Requires {PROJECT_URL} for direct navigation. Defaults to Veo 3.1 Fast, Portrait, Frames mode for image-to-video workflows.",
+  "platform": "google-flow",
+  "version": "4.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "video",
+    "generate",
+    "frames"
+  ],
+  "successCount": 1,
+  "failCount": 0,
+  "notes": [
+    "CRITICAL: For job_create inline steps, browser_js code goes in the 'description' field (not 'text' or 'code'). The job runner calls execBrowserJs(step.description).",
+    "CRITICAL: The ONLY reliable submit method is the job runner's 'click' action with target 'Create'. browser_human_click fails with 'Element not found via CDP'. JS-dispatched MouseEvents and programmatic onSubmit() from fiber tree both fire but silently do nothing.",
+    "CRITICAL: Settings panel tabs use Material Icons font for icons — the icon name (e.g. 'videocam') may or may not appear in textContent depending on font loading state. Match tabs by their label text ('Video', 'Image', 'Frames', etc.) not icon names.",
+    "Settings panel is opened by clicking the button whose text includes crop_16_9 or crop_9_16 plus x[1234]. All settings inside use role='tab' with aria-selected.",
+    "Frames mode lets you create video from reference images (start frame, end frame, or both). Ingredients mode lets you reference uploaded media assets.",
+    "Video generation costs 20 credits per output on Veo 3.1 Fast. Check weekly limit before generating.",
+    "type_text action works for prompt entry after focusing the Slate editor via browser_js and clearing with document.execCommand.",
+    "The prompt editor is focused and cleared with: editor.focus(); document.execCommand('selectAll'); document.execCommand('delete');",
+    "Wait 800ms+ after opening the settings panel before clicking tabs, otherwise tabs may not be rendered yet."
+  ],
+  "jobStepsTemplate": [
+    {
+      "action": "navigate",
+      "target": "{PROJECT_URL}",
+      "description": "Open the Flow project"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { const start = Date.now(); return new Promise(resolve => { const check = () => { if (document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\")) { resolve('editor ready'); return; } if (Date.now() - start > 15000) { resolve('timeout'); return; } setTimeout(check, 500); }; check(); }); })()"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { const btn = [...document.querySelectorAll('button')].find(el => { const t = el.textContent || ''; return (t.includes('crop_16_9') || t.includes('crop_9_16')) && t.match(/x[1234]/); }); if (!btn) throw new Error('Settings button not found'); btn.click(); return 'opened settings panel'; })()"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { return new Promise(resolve => setTimeout(() => resolve('panel rendered'), 800)); })()"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { const tabs = [...document.querySelectorAll('[role=\"tab\"]')]; const videoTab = tabs.find(el => { const t = (el.textContent || '').toLowerCase(); return t.includes('video') && !t.includes('image'); }); if (!videoTab) throw new Error('Video tab not found among: ' + tabs.map(t => t.textContent?.trim()).join(' | ')); videoTab.click(); return 'Video mode selected (aria-selected=' + videoTab.getAttribute('aria-selected') + ')'; })()"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { return new Promise(resolve => { setTimeout(() => { const tabs = [...document.querySelectorAll('[role=\"tab\"]')]; const framesTab = tabs.find(el => (el.textContent || '').includes('Frames')); if (framesTab && framesTab.getAttribute('aria-selected') !== 'true') framesTab.click(); const portraitTab = tabs.find(el => (el.textContent || '').includes('Portrait')); if (portraitTab && portraitTab.getAttribute('aria-selected') !== 'true') portraitTab.click(); resolve('Frames + Portrait applied'); }, 300); }); })()"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { return new Promise(resolve => { setTimeout(() => { const btn = [...document.querySelectorAll('button')].find(el => { const t = el.textContent || ''; return (t.includes('crop_16_9') || t.includes('crop_9_16')) && t.match(/x[1234]/); }); if (btn) btn.click(); resolve('settings panel closed'); }, 300); }); })()"
+    },
+    {
+      "action": "wait",
+      "description": "Allow settings to settle"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { const ed = document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\"); if (ed) { ed.focus(); document.execCommand('selectAll'); document.execCommand('delete'); } return 'prompt editor focused and cleared'; })()"
+    },
+    {
+      "action": "type_text",
+      "text": "{PROMPT_TEXT}",
+      "description": "Type the video generation prompt via keyboard"
+    },
+    {
+      "action": "wait",
+      "description": "Allow Slate to process typed text"
+    },
+    {
+      "action": "click",
+      "target": "Create",
+      "description": "Click the Create button to start video generation"
+    },
+    {
+      "action": "browser_js",
+      "description": "(() => { const start = Date.now(); return new Promise(resolve => { const check = () => { const body = document.body.innerText; if (body.includes('Generating') || body.match(/\\d+%/)) { resolve('video generation started'); return; } if (Date.now() - start > 20000) { resolve('timeout waiting for generation indicator'); return; } setTimeout(check, 1000); }; check(); }); })()"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the project after submission"
+    }
+  ],
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "{PROJECT_URL}",
+      "description": "Navigate directly to the Flow project URL"
+    },
+    {
+      "action": "wait",
+      "ms": 2000,
+      "description": "Wait for page to load"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const start = Date.now(); return new Promise(resolve => { const check = () => { if (document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\")) { resolve('editor ready'); return; } if (Date.now() - start > 15000) { resolve('timeout waiting for editor'); return; } setTimeout(check, 500); }; check(); }); })()",
+      "description": "Wait for the Slate prompt editor to appear (up to 15s)"
+    },
+    {
+      "action": "wait",
+      "ms": 500,
+      "description": "Allow the prompt panel to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const settingsBtn = [...document.querySelectorAll('button')].find(el => { const t = (el.textContent || ''); return (t.includes('crop_16_9') || t.includes('crop_9_16')) && t.match(/x[1234]/); }); if (!(settingsBtn instanceof HTMLElement)) throw new Error('Settings button not found'); settingsBtn.click(); return 'opened settings panel'; })()",
+      "description": "Open the generation settings panel by clicking the mode/aspect/count button"
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "description": "Allow settings panel to fully render before clicking tabs"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const tabs = [...document.querySelectorAll('[role=\"tab\"]')]; const videoTab = tabs.find(el => { const t = (el.textContent || '').toLowerCase(); return t.includes('video') && !t.includes('image'); }); if (!videoTab) throw new Error('Video tab not found among: ' + tabs.map(t => t.textContent?.trim()).join(' | ')); videoTab.click(); return 'Video mode selected'; })()",
+      "description": "Select Video mode"
+    },
+    {
+      "action": "wait",
+      "ms": 300,
+      "description": "Allow mode switch to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const rawMode = `{GENERATION_MODE}`.trim(); const mode = (!rawMode || rawMode === '{GENERATION_MODE}') ? 'Frames' : rawMode; const tab = [...document.querySelectorAll('[role=\"tab\"]')].find(el => (el.textContent || '').includes(mode)); if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click(); return `${mode} mode selected`; })()",
+      "description": "Select Frames or Ingredients mode (defaults to Frames for image-to-video)"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const rawAspect = `{ASPECT_RATIO}`.trim().toLowerCase(); const aspect = (!rawAspect || rawAspect === '{aspect_ratio}') ? 'Portrait' : (rawAspect === 'landscape' ? 'Landscape' : 'Portrait'); const tab = [...document.querySelectorAll('[role=\"tab\"]')].find(el => (el.textContent || '').includes(aspect)); if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click(); return `${aspect} aspect selected`; })()",
+      "description": "Select aspect ratio (defaults to Portrait)"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const btn = [...document.querySelectorAll('button')].find(el => { const t = (el.textContent || ''); return (t.includes('crop_16_9') || t.includes('crop_9_16')) && t.match(/x[1234]/); }); if (btn) btn.click(); return 'closed settings panel'; })()",
+      "description": "Close the settings panel"
+    },
+    {
+      "action": "wait",
+      "ms": 500,
+      "description": "Allow settings to settle"
+    },
+    {
+      "action": "browser_click",
+      "selector": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "description": "Click/focus the prompt editor before typing"
+    },
+    {
+      "action": "browser_type",
+      "selector": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "text": "{PROMPT_TEXT}",
+      "clear": true,
+      "description": "Type the video prompt via CDP keyboard events"
+    },
+    {
+      "action": "wait",
+      "ms": 300,
+      "description": "Allow Slate to process the typed text"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const btn = [...document.querySelectorAll('button')].find(el => (el.textContent || '').includes('arrow_forward') && (el.textContent || '').includes('Create')); if (!btn) throw new Error('Create button not found'); btn.id = 'flow-create-submit'; return 'tagged Create button'; })()",
+      "description": "Assign a unique ID to the Create submit button"
+    },
+    {
+      "action": "browser_human_click",
+      "selector": "#flow-create-submit",
+      "description": "Click the Create button with realistic mouse events to trigger video generation"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const start = Date.now(); return new Promise(resolve => { const check = () => { const body = document.body.innerText; if (body.includes('Generating') || body.match(/\\d+%/)) { resolve('video generation started'); return; } if (Date.now() - start > 20000) { resolve('timeout waiting for generation indicator'); return; } setTimeout(check, 1000); }; check(); }); })()",
+      "description": "Verify that video generation started"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the project after submission",
+      "optional": true
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+// Copyright (C) 2025 Clazro Technology Private Limited
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// This file is part of ScreenHand.
+//
+// ScreenHand is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, version 3.
+//
+// ScreenHand is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with ScreenHand. If not, see <https://www.gnu.org/licenses/>.
+
+import { EventEmitter } from "node:events";
+import type { BridgeClient } from "../native/bridge-client.js";
+import type { AppContext } from "../types.js";
+import type { WorldModel } from "../state/world-model.js";
+import { StateObserver } from "../runtime/state-observer.js";
+import { AXSource } from "./ax-source.js";
+import { CDPSource } from "./cdp-source.js";
+import { VisionSource } from "./vision-source.js";
+import { PerceptionCoordinator } from "./coordinator.js";
+import type { PerceptionCoordinatorConfig, PerceptionStats } from "./types.js";
+import { createEmptyStats } from "./types.js";
+import type { LearningEngine } from "../learning/engine.js";
+
+/**
+ * PerceptionManager — creates sources lazily when the bridge is ready,
+ * auto-starts perception on first app context, manages context switches,
+ * and emits reactive events (dialog_detected, app_switched).
+ */
+export class PerceptionManager extends EventEmitter {
+  private coordinator: PerceptionCoordinator | null = null;
+  private sourcesCreated = false;
+  private currentContext: AppContext | null = null;
+  private currentPid: number | null = null;
+  private currentBundleId: string | null = null;
+  private lastCdpClient: any = null;
+  private pendingLearningEngine: LearningEngine | null = null;
+
+  constructor(
+    private readonly worldModel: WorldModel,
+    private readonly config?: Partial<PerceptionCoordinatorConfig>,
+  ) {
+    super();
+  }
+
+  /**
+   * Inject the learning engine. If coordinator already exists, wires immediately.
+   * Otherwise, defers until createSources() is called.
+   */
+  setLearningEngine(engine: LearningEngine): void {
+    this.pendingLearningEngine = engine;
+    if (this.coordinator) {
+      this.coordinator.setLearningEngine(engine);
+    }
+  }
+
+  /**
+   * Create perception sources from the bridge. Called once after ensureBridge().
+   */
+  createSources(bridge: BridgeClient): void {
+    if (this.sourcesCreated) return;
+    this.sourcesCreated = true;
+
+    const observer = new StateObserver(bridge);
+    const axSource = new AXSource(observer, bridge);
+    const cdpSource = new CDPSource();
+    const visionSource = new VisionSource(bridge);
+
+    this.coordinator = new PerceptionCoordinator(
+      this.worldModel,
+      axSource,
+      cdpSource,
+      visionSource,
+      { enableVision: true, ...this.config },
+    );
+
+    if (this.pendingLearningEngine) {
+      this.coordinator.setLearningEngine(this.pendingLearningEngine);
+    }
+
+    this.coordinator.on("perception", (event) => {
+      this.handleReactiveEvent(event);
+    });
+  }
+
+  /**
+   * Ensure perception is started for the given app context.
+   * Idempotent — starts if not running, switches context if app changed.
+   */
+  async ensureStarted(appContext: AppContext, cdpClient?: any): Promise<void> {
+    if (!this.coordinator) return;
+
+    const client = cdpClient ?? this.lastCdpClient;
+
+    if (!this.coordinator.isRunning) {
+      this.currentContext = appContext;
+      this.currentPid = appContext.pid;
+      this.currentBundleId = appContext.bundleId;
+      await this.coordinator.start(appContext, client);
+    } else if (this.currentPid !== appContext.pid) {
+      this.currentContext = appContext;
+      this.currentPid = appContext.pid;
+      this.currentBundleId = appContext.bundleId;
+      await this.coordinator.switchContext(appContext, client);
+    }
+  }
+
+  /**
+   * Activate CDP source with a new client.
+   */
+  activateCDP(cdpClient: any): void {
+    this.lastCdpClient = cdpClient;
+    if (this.coordinator?.isRunning && this.currentContext) {
+      void this.coordinator.switchContext(this.currentContext, cdpClient);
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (this.coordinator?.isRunning) {
+      await this.coordinator.stop();
+    }
+    this.currentContext = null;
+    this.currentPid = null;
+    this.currentBundleId = null;
+  }
+
+  get isRunning(): boolean {
+    return this.coordinator?.isRunning ?? false;
+  }
+
+  getStats(): PerceptionStats {
+    return this.coordinator?.getStats() ?? createEmptyStats();
+  }
+
+  getFreshnessSummary(): string {
+    return this.coordinator?.getFreshnessSummary() ?? "Perception: not initialized";
+  }
+
+  getConfig(): PerceptionCoordinatorConfig | null {
+    return this.coordinator?.getConfig() ?? null;
+  }
+
+  getCoordinator(): PerceptionCoordinator | null {
+    return this.coordinator;
+  }
+
+  private handleReactiveEvent(event: any): void {
+    if (event.data?.type === "ax_events" && Array.isArray(event.data.events)) {
+      for (const uiEvent of event.data.events) {
+        if (uiEvent.type === "dialog_appeared") {
+          this.emit("dialog_detected", {
+            title: uiEvent.windowTitle ?? "",
+            pid: uiEvent.pid,
+          });
+        }
+        if (
+          uiEvent.type === "app_activated" &&
+          uiEvent.bundleId &&
+          uiEvent.bundleId !== this.currentBundleId
+        ) {
+          this.emit("app_switched", {
+            bundleId: uiEvent.bundleId,
+            pid: uiEvent.pid,
+          });
+        }
+      }
+    }
+  }
+}

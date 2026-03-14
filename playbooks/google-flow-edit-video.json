@@ -1,0 +1,90 @@
+{
+  "id": "google-flow-edit-video",
+  "name": "Google Flow — Edit Video",
+  "description": "Open a Flow project, switch to video assets, open a matching video edit URL, and apply an Extend or Camera edit through Flow's internal prompt tray. EXTEND, CAMERA_MOTION, and CAMERA_POSITION are fully automated. INSERT and REMOVE are staged because they still need on-frame region selection unless {AUTO_SUBMIT} is explicitly set to 1.",
+  "platform": "google-flow",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*labs.google/fx/tools/flow*"
+  ],
+  "tags": [
+    "google-flow",
+    "browser",
+    "cdp",
+    "video",
+    "edit"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://labs.google/fx/tools/flow",
+      "description": "Open the Flow dashboard"
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for dashboard project cards"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawWanted = `{PROJECT_NAME}`.trim(); const wanted = rawWanted.toLowerCase(); const hasWanted = !!rawWanted && rawWanted !== '{PROJECT_NAME}'; const links = [...document.querySelectorAll(\"a[href*='/fx/tools/flow/project/']\")].filter(visible); if (!links.length) throw new Error('No Flow project cards found'); const pick = hasWanted ? links.find(link => ((link.closest('div')?.textContent || link.parentElement?.textContent || '')).toLowerCase().includes(wanted)) : links[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error(hasWanted ? `Flow project not found: ${rawWanted}` : 'No clickable Flow project found'); const url = pick.href || pick.getAttribute('href'); if (!url) throw new Error('Project card is missing href'); window.location.assign(url); return url; })()",
+      "description": "Open the matching project card",
+      "verify": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 800,
+      "description": "Allow the project editor to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const button = [...document.querySelectorAll('button')].find(el => (el.textContent || '').includes('View videos')); if (button instanceof HTMLElement) button.click(); return !!button; })()",
+      "description": "Switch the asset rail to videos when the filter is present"
+    },
+    {
+      "action": "wait",
+      "ms": 400,
+      "description": "Wait for the video grid filter to apply"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; }; const rawUrl = `{ASSET_URL}`.trim(); const rawId = `{ASSET_ID}`.trim(); const rawIndex = `{ASSET_INDEX}`.trim(); const wantedIndex = rawIndex && rawIndex !== '{ASSET_INDEX}' ? Number(rawIndex) : 0; const anchors = [...document.querySelectorAll(\"a[href*='/edit/']\")].filter(visible).filter(anchor => { const tile = anchor.closest(\"[id^='fe_id_']\") || anchor.parentElement; return !!tile?.querySelector('video') || /play_circle/.test(tile?.textContent || ''); }); let pick = null; if (rawUrl && rawUrl !== '{ASSET_URL}') pick = anchors.find(anchor => anchor.href === rawUrl); else if (rawId && rawId !== '{ASSET_ID}') pick = anchors.find(anchor => anchor.href.includes(`/edit/${rawId}`) || anchor.closest(`[id='fe_id_${rawId}']`)); else pick = anchors[Math.max(0, wantedIndex)] || anchors[0]; if (!(pick instanceof HTMLAnchorElement)) throw new Error('No Flow video edit link found'); window.location.assign(pick.href); return pick.href; })()",
+      "description": "Open the requested video asset in edit view",
+      "verify": "[role='textbox'][contenteditable='true'][data-slate-editor='true']",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 600,
+      "description": "Allow the video editor to settle"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const modeRaw = `{EDIT_MODE}`.trim().toUpperCase(); const mode = !modeRaw || modeRaw === '{EDIT_MODE}' ? 'EXTEND' : modeRaw; const autoSubmit = `{AUTO_SUBMIT}`.trim() === '1'; const clickButton = text => { const button = [...document.querySelectorAll('button')].find(el => (el.textContent || '').includes(text)); if (!(button instanceof HTMLElement)) throw new Error(`Flow video control not found: ${text}`); button.click(); return text; }; const pickPreset = preferred => { const buttons = [...document.querySelectorAll('button')]; const exact = buttons.find(el => (el.textContent || '').trim() === preferred); const fuzzy = buttons.find(el => (el.textContent || '').includes(preferred)); const button = exact || fuzzy; if (!(button instanceof HTMLElement)) throw new Error(`Flow camera preset not found: ${preferred}`); button.click(); return preferred; }; return new Promise(resolve => { let shouldSubmit = false; let needsPrompt = false; let selected = mode; const finish = extra => { window.__flowVideoEditMode = mode; window.__flowVideoEditShouldSubmit = shouldSubmit; window.__flowVideoEditNeedsPrompt = needsPrompt; resolve(JSON.stringify({ mode, shouldSubmit, needsPrompt, selected, ...extra })); }; if (mode === 'EXTEND') { clickButton('Extend'); shouldSubmit = true; needsPrompt = true; finish({}); return; } if (mode === 'CAMERA_MOTION' || mode === 'CAMERA_POSITION') { clickButton('Camera'); setTimeout(() => { clickButton(mode === 'CAMERA_MOTION' ? 'Camera motion' : 'Camera position'); const rawPreset = `{CAMERA_PRESET}`.trim(); const preferred = rawPreset && rawPreset !== '{CAMERA_PRESET}' ? rawPreset : mode === 'CAMERA_MOTION' ? 'Dolly in' : 'Center'; selected = pickPreset(preferred); shouldSubmit = true; needsPrompt = false; finish({}); }, 120); return; } if (mode === 'INSERT') { clickButton('Insert'); shouldSubmit = autoSubmit; needsPrompt = true; finish({ stagedOnly: !autoSubmit }); return; } if (mode === 'REMOVE') { clickButton('Remove'); shouldSubmit = autoSubmit; needsPrompt = false; finish({ stagedOnly: !autoSubmit }); return; } throw new Error(`Unsupported Flow video edit mode: ${mode}`); }); })()",
+      "description": "Choose the video edit mode and stage any camera or region-selection UI"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { if (!window.__flowVideoEditShouldSubmit || !window.__flowVideoEditNeedsPrompt) return JSON.stringify({ skipped: true, reason: window.__flowVideoEditShouldSubmit ? 'no_prompt_needed' : 'staged_only' }); const prompt = `{PROMPT_TEXT}`.trim(); if (!prompt || prompt === '{PROMPT_TEXT}') throw new Error('PROMPT_TEXT variable is required for this Flow video edit mode'); const editorEl = document.querySelector(\"[role='textbox'][contenteditable='true'][data-slate-editor='true']\"); if (!(editorEl instanceof HTMLElement)) throw new Error('Flow video edit prompt box not found'); const fiberKey = Object.keys(editorEl).find(k => k.startsWith('__reactFiber')); let cur = fiberKey ? editorEl[fiberKey] : null; let store = null; for (let i = 0; cur && i < 9; i++, cur = cur.return) { if (i === 7) { store = cur.memoizedProps?.promptBoxStore; break; } } const state = store?.getState?.(); const actions = state?.actions; const textEditor = state?.inputs?.textEditor; if (!actions || !textEditor) throw new Error('Flow video edit store not found'); if (typeof actions.setMode === 'function') actions.setMode('VIDEO'); const currentText = textEditor.children?.[0]?.children?.[0]?.text ?? ''; try { textEditor.select({ anchor: { path: [0, 0], offset: 0 }, focus: { path: [0, 0], offset: currentText.length } }); } catch {} try { textEditor.deleteFragment(); } catch {} textEditor.insertText(prompt); try { textEditor.onChange(); } catch {} const text = (textEditor.children || []).map(node => (node.children || []).map(child => child.text || '').join('')).join('\\n'); window.__flowVideoEditPrompt = text; return JSON.stringify({ prompt: text, mode: store.getState().mode, editMode: window.__flowVideoEditMode || 'EXTEND' }); })()",
+      "description": "Insert the video edit prompt when the selected mode needs one"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { if (!window.__flowVideoEditShouldSubmit) return JSON.stringify({ submitted: false, reason: 'staged_only' }); const submitButton = [...document.querySelectorAll('button')].find(el => (el.textContent || '').includes('arrow_forward') && (el.textContent || '').includes('Create')); if (!(submitButton instanceof HTMLElement)) throw new Error('Flow video edit submit button not found'); const fiberKey = Object.keys(submitButton).find(k => k.startsWith('__reactFiber')); let cur = fiberKey ? submitButton[fiberKey] : null; let onSubmit = null; for (let i = 0; cur && i < 6; i++, cur = cur.return) { if (i === 5) { onSubmit = cur.memoizedProps?.onSubmit; break; } } if (typeof onSubmit !== 'function') throw new Error('Flow video edit onSubmit handler not found'); window.__flowVideoEditBaseline = { resourceCount: performance.getEntriesByType('resource').length }; onSubmit(); return JSON.stringify({ submitted: true, baseline: window.__flowVideoEditBaseline, editMode: window.__flowVideoEditMode || 'EXTEND' }); })()",
+      "description": "Submit the video edit through Flow's internal handler"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { if (!window.__flowVideoEditShouldSubmit) return JSON.stringify({ staged: true }); const baseline = window.__flowVideoEditBaseline || { resourceCount: 0 }; const seenRequest = () => performance.getEntriesByType('resource').slice(baseline.resourceCount).some(entry => /video:batchAsyncGenerateVideoText|flowWorkflows\\//.test(entry.name)); const start = Date.now(); return new Promise(resolve => { const check = () => { if (seenRequest()) { resolve(JSON.stringify({ submitted: true, generationRequestSeen: true, editMode: window.__flowVideoEditMode || 'EXTEND' })); return; } if (Date.now() - start > 30000) { resolve(JSON.stringify({ submitted: false, generationRequestSeen: false, editMode: window.__flowVideoEditMode || 'EXTEND' })); return; } setTimeout(check, 1000); }; check(); }); })()",
+      "description": "Wait for Flow to issue the video edit request"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the video editor after staging or submission",
+      "optional": true
+    }
+  ]
+}

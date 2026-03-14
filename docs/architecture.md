@@ -1,117 +1,565 @@
 # ScreenHand Architecture
 
+## What ScreenHand Is
+
+ScreenHand is an **MCP server that gives AI agents native desktop control** on macOS and Windows. It exposes 88 tools for controlling applications through accessibility APIs, Chrome DevTools Protocol, OCR/Vision, and keyboard/coordinate input.
+
+**Current capability**: ScreenHand can reliably control apps with AX/CDP-exposed UI (browsers, native apps with standard controls, Electron apps). For canvas-heavy pro tools (Premiere Pro, Photoshop, Canva editor, DaVinci Resolve timeline), control is limited to menus, panels, keyboard shortcuts, and OCR+coordinates — the core workspace (timeline, canvas, viewport) is not semantically accessible.
+
+**Target capability**: A tool mastery platform that systematically ingests expert knowledge about any application and executes workflows autonomously with continuous awareness, self-healing, and learning.
+
+The core insight: **the tools already exist, the knowledge already exists, the experts already exist.** ScreenHand's job is to encode that knowledge and execute it reliably.
+
 ## Source of Truth
 
-The canonical MCP server is **`mcp-desktop.ts`** (project root).
-It registers all 50+ tools directly and exposes ScreenHand as a unified runtime.
+The canonical MCP server is **`mcp-desktop.ts`** (project root). 88 tools. Production entry point.
 
-## Design Principles
+---
 
-1. **ScreenHand = runtime + memory + supervisor** — clients are planners only
-2. **One canonical execution contract**: AX/UIA → CDP → OCR → coordinates
-3. **Memory exposed through MCP tools** — no raw file access for clients
-4. **Lease/lock system** — one client per window, heartbeat-based expiry
-5. **Client profiles** — different instruction layers, same runtime
+## Architecture Layers
 
-## Layers
+ScreenHand is organized into 6 layers, from bottom (hardware) to top (mastery):
 
 ```
-AI Client (Claude / Codex / Cursor / OpenClaw)
-    │  Loaded with client profile (profiles/*.md)
-    │
-    ▼  MCP protocol (stdio)
-mcp-desktop.ts — canonical MCP server
-    │
-    ├── Memory Service (src/memory/service.ts)
-    │     state.json      — current session snapshot
-    │     events/actions   — append-only timeline
-    │     errors.jsonl     — normalized failures
-    │     learnings.jsonl  — verified patterns
-    │     strategies.jsonl — successful sequences
-    │
-    ├── Session Supervisor (src/supervisor/)
-    │     locks/           — one file per window lease
-    │     state.json       — supervisor health
-    │     recoveries.json  — pending recovery actions
-    │
-    ├── Execution Engine (src/runtime/execution-contract.ts)
-    │     AX/UIA (~50ms) → CDP (~10ms) → OCR (~600ms) → Coordinates
-    │
-    ├── Native Bridge (BridgeClient → JSON-RPC → Swift/C#)
-    │     Accessibility, CoreGraphics, Vision, SendInput
-    │
-    └── Chrome CDP (browser_* tools)
-          DevTools Protocol for browser automation
+┌──────────────────────────────────────────────────────────────┐
+│  LAYER 6: TOOL MASTERY                                       │
+│  "I know how to use Premiere Pro like an expert"             │
+│                                                              │
+│  Knowledge ingestion, expert workflow library,               │
+│  community playbooks, documentation parsers,                 │
+│  cross-tool skill transfer                                   │
+│  Status: PLANNED                                             │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 5: LEARNING                                           │
+│  "I remember what worked and what didn't"                    │
+│                                                              │
+│  Locator stability, sensor effectiveness,                    │
+│  recovery strategy ranking, adaptive timeouts,               │
+│  per-app behavior profiles                                   │
+│  Status: PLANNED                                             │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 4: AUTONOMY                                           │
+│  "I can plan, execute, recover, and continue"                │
+│                                                              │
+│  Goal planner, deterministic executor,                       │
+│  recovery engine, self-healing, replanning                   │
+│  Status: PLANNED                                             │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 3: AWARENESS                                          │
+│  "I always know what's on screen"                            │
+│                                                              │
+│  World model, continuous perception,                         │
+│  multi-source fusion, confidence scoring                     │
+│  Status: PLANNED (StateObserver + PlanningLoop exist)        │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 2: TOOL KNOWLEDGE                                     │
+│  "I know this app's shortcuts, selectors, and workflows"     │
+│                                                              │
+│  references/*.json, playbooks/*.json,                        │
+│  context tracker, memory service, intelligence wrapper       │
+│  Status: BUILT (38 references, 28 playbooks)                 │
+├──────────────────────────────────────────────────────────────┤
+│  LAYER 1: CONTROL                                            │
+│  "I can click, type, read, and navigate"                     │
+│                                                              │
+│  AX adapter (~50ms), CDP adapter (~10ms),                    │
+│  OCR/Vision (~600ms), keyboard, coordinates,                 │
+│  native bridge (Swift/C#), fallback chains                   │
+│  Status: BUILT (88 MCP tools, all working)                   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Execution Contract
+**Where we are today:** Layers 1-2 are solid. Layer 3 has partial groundwork. Layers 4-6 are planned.
 
-Every action follows this fallback chain:
+**What this means:** ScreenHand has reliable control for AX/CDP-exposed UI and curated knowledge for 38+ apps (Layers 1-2). Control depth varies by app type — see App Tiers below. What's missing is continuous awareness (Layer 3), autonomous execution (Layer 4), learning from experience (Layer 5), and systematic knowledge ingestion at scale (Layer 6).
 
-| Priority | Method | Speed | Can Click | Can Type | Can Read | Requires |
-|----------|--------|-------|-----------|----------|----------|----------|
-| 1 | AX/UIA | ~50ms | Yes | Yes | Yes | Native bridge |
-| 2 | CDP | ~10ms | Yes | Yes | Yes | Chrome CDP |
-| 3 | OCR | ~600ms | No | No | Yes | Native bridge |
-| 4 | Coordinates | ~50ms | Yes | No | No | Native bridge |
+---
 
-Retry policy: 2 retries per method, 5 total, escalate to supervisor after 3.
+## Layer 1: Control (BUILT)
 
-## Memory Service
+The foundation. ScreenHand interacts with applications through multiple control channels. Coverage depth depends on app type.
 
-Multi-file persistence with in-memory caching:
+### App Tiers — What Works Today
 
-| File | Purpose | Format |
-|------|---------|--------|
-| `state.json` | Current session snapshot (small, debounced) | JSON |
-| `actions.jsonl` | Every action taken | Append JSONL, rotate at 10MB |
-| `errors.jsonl` | Failures + resolutions | JSONL, LRU 200 |
-| `strategies.jsonl` | Successful sequences | JSONL, LRU 500 |
-| `learnings.jsonl` | Verified patterns (scope/method/confidence) | JSONL, LRU 1000 |
+| Tier | App type | Examples | Primary method | What's accessible | What's not | Current reliability |
+|---|---|---|---|---|---|---|
+| **Tier 1: Browser** | Web apps in Chrome/Electron | Gmail, Canva sidebar, Figma sidebar, web apps | CDP + AX | Full DOM, all elements, forms, navigation | `<canvas>` internals | ~90% for standard UI |
+| **Tier 2: AX-native** | Native apps with standard controls | TextEdit, Finder, System Settings, Mail, Notes | AX | Buttons, fields, menus, dialogs, text areas | Custom-drawn views | ~85% for standard UI |
+| **Tier 3: Hybrid** | Pro apps with mix of standard + custom UI | Premiere Pro, DaVinci Resolve, Photoshop, After Effects | AX (panels/menus) + keyboard + OCR (workspace) | Menus, panels, tool palettes, dialogs, shortcuts | Timeline, canvas, viewport, preview | ~70% for panel UI, ~40% for workspace |
+| **Tier 4: Canvas-only** | Apps where core UI is a single canvas | Games, some creative tools | OCR + coordinates + keyboard | Whatever is visually readable | Everything semantic | ~30% best effort |
 
-MCP tools: `memory_snapshot`, `memory_recall`, `memory_save`, `memory_record_error`,
-`memory_record_learning`, `memory_query_patterns`, `memory_errors`, `memory_stats`, `memory_clear`
+Tier 3 is where most professional creative tools sit. The autonomy stack (Layers 3-5) and tool mastery (Layer 6) are primarily aimed at improving Tier 3 coverage from ~40% workspace control to ~75%+ through better perception, learned coordinates, and keyboard-first workflows.
 
-## Session Supervisor
+### Execution Contract
 
-Client-agnostic session management:
+| Priority | Method | Avg Latency | Can Click | Can Type | Can Read | Best For |
+|----------|--------|-------------|-----------|----------|----------|----------|
+| 1 | AX/UIA | ~50ms | Yes | Yes | Yes | Native app buttons, fields, menus |
+| 2 | CDP | ~10ms | Yes | Yes | Yes | Browser/Electron DOM elements |
+| 3 | OCR | ~600ms | No | No | Yes | Canvas content, visual-only UI |
+| 4 | Coordinates | ~50ms | Yes | No | No | Known positions, OCR-located targets |
 
-- **Lease system**: `session_claim` → `session_heartbeat` → `session_release`
-- **Stall detection**: compares heartbeat timestamps against threshold
-- **Auto-recovery**: nudge → restart → escalate based on blocker patterns
-- **One client per window**: filesystem locks in `~/.screenhand/locks/`
+Retry: 2 per method, 5 total, 500ms delay. Fallback tools (`*_with_fallback`) try each method in order.
 
-MCP tools: `session_claim`, `session_heartbeat`, `session_release`,
-`supervisor_status`, `supervisor_start`, `supervisor_stop`, `supervisor_pause`, `supervisor_resume`,
-`recovery_queue_add`, `recovery_queue_list`
+### Action Budget
 
-## Client Profiles
+| Phase | Default | Purpose |
+|---|---|---|
+| Locate | 800ms | Find the target element |
+| Act | 200ms | Perform the action |
+| Verify | 2000ms | Confirm effect |
+| Retries | 1 | Retry once on failure |
 
-Located in `profiles/`. Each profile instructs a specific AI client how to use ScreenHand:
-- Session lifecycle (claim → heartbeat → release)
-- Action loop (observe → act → verify)
-- Error handling and fallback behavior
-- Long-run rules (checkpoint frequency, retry limits)
+### Adapter System
 
-Profiles: `claude.md`, `codex.md`, `cursor.md`, `openclaw.md`
+```
+CompositeAdapter (routes per app)
+  ├── AccessibilityAdapter  — macOS AX API via Swift bridge (default)
+  ├── CdpChromeAdapter      — Chrome DevTools Protocol (Chromium/Electron)
+  ├── AppleScriptAdapter    — Scriptable macOS apps (Finder, Mail, etc.)
+  └── VisionAdapter         — OCR-based fallback via native bridge
+```
+
+### Native Bridge
+
+JSON-RPC over stdio to platform-native binaries:
+- **macOS**: Swift binary — accessibility, CoreGraphics capture, Vision OCR
+- **Windows**: C# .NET 8 binary — UI Automation, screen capture, Windows OCR
+- Timeouts: 10s default, 30s app launch, 20s OCR, 15s capture
+
+### Tool Groups (88 total)
+
+| Group | Count | Examples |
+|---|---|---|
+| Desktop | 19 | `apps`, `windows`, `focus`, `launch`, `screenshot`, `ocr`, `ui_tree`, `ui_press`, `click`, `type_text`, `key` |
+| Browser | 12 | `browser_navigate`, `browser_click`, `browser_type`, `browser_dom`, `browser_js`, `browser_fill_form` |
+| Fallback | 8 | `click_with_fallback`, `type_with_fallback`, `read_with_fallback`, `execution_plan` |
+| Platform Knowledge | 6 | `platform_guide`, `playbook_preflight`, `platform_learn`, `platform_explore` |
+| Observer/Orchestrator | 7 | `observer_start/stop/status`, `orchestrator_start/stop/submit/status` |
+| Memory | 9 | `memory_save`, `memory_recall`, `memory_snapshot`, `memory_errors`, `memory_query_patterns` |
+| Supervisor | 12 | `session_claim/heartbeat/release`, `supervisor_start/stop/status`, `recovery_queue_*` |
+| Jobs | 15 | `job_create/run/status/list`, `worker_start/stop/status` |
+
+---
+
+## Layer 2: Tool Knowledge (BUILT)
+
+This is ScreenHand's competitive advantage. Curated, machine-readable knowledge about how to operate specific tools.
+
+### Reference Files (references/*.json)
+
+38 reference files covering:
+
+| Category | Apps | Examples |
+|---|---|---|
+| Design | Canva, Figma | Selectors, shortcuts, UI patterns, API mappings |
+| Video | DaVinci Resolve | 4 menu map files, keyboard shortcuts, edit/color/render flows |
+| Social | Twitter/X, LinkedIn, Instagram, Threads, Reddit, Discord | Post flows, selectors, navigation |
+| Browser | YouTube, DevTo, DevPost | Search, upload, navigation flows |
+| Developer | Codex Desktop, N8N, VS Code | CDP ports, panel selectors |
+| Ads/Research | Google Ads, Meta Ad Library | Search flows, competitor research |
+
+### Reference File Structure
+
+```json
+{
+  "id": "canva",
+  "platform": "canva",
+  "bundleId": "com.canva.CanvaDesktop",
+  "cdpPort": 9333,
+  "urls": { ... },
+  "shortcuts": {
+    "general": { "Create new design": "Cmd+N", ... },
+    "text": { "Bold": "Cmd+B", ... },
+    "elements": { "Add rectangle": "R", ... }
+  },
+  "selectors": {
+    "toolbar": { "search": "[aria-label='Search']", ... },
+    "auto_discovered": { ... }
+  },
+  "flows": {
+    "create_design": { "steps": [...] },
+    "export_png": { "steps": [...] }
+  },
+  "errors": [
+    { "error": "Element not interactable", "solution": "Wait for loading overlay", "severity": "high" }
+  ]
+}
+```
+
+### Playbooks (playbooks/*.json)
+
+28 executable playbooks — recorded step-by-step workflows:
+
+| App | Playbooks | What they do |
+|---|---|---|
+| DaVinci Resolve | 3 | Color grade, edit timeline, render |
+| Google Flow | 7 | Create project, edit image/video, generate image/video, search assets |
+| Social platforms | 6 | Post to X, LinkedIn, Reddit, Instagram, Discord, Threads |
+| Research | 3 | Competitor research via Google Ads, Google Search, Meta Ad Library |
+| Canva | 1 | Create carousel |
+| N8N | 1 | Workflow automation |
+| YouTube | 1 | Upload flow |
+
+### Context Tracker (src/context-tracker.ts)
+
+Automatically connects tool execution to knowledge:
+1. **DETECT**: When `browser_navigate("canva.com")` or `focus("com.canva.CanvaDesktop")` is called, loads matching reference
+2. **HINT**: Before each tool call, suggests known selectors and warns about known errors
+3. **LEARN**: Records which selectors work, auto-promotes to reference after 2+ successes
+4. **FLUSH**: Merges learnings back into reference files
+
+### Intelligence Wrapper (mcp-desktop.ts:173-345)
+
+Every tool call (52 of 88) goes through this pipeline:
+
+```
+PRE-CALL:
+  1. quickErrorCheck(tool)      → warn if this tool failed before + show fix
+  2. contextTracker.update()    → load reference on domain/bundleId change
+  3. contextTracker.getHints()  → suggest selectors, warn known errors, offer playbook
+
+POST-CALL (success):
+  4. memory.recordEvent()       → log to actions.jsonl
+  5. contextTracker.record()    → learn which selectors work
+  6. mcpRecorder.capture()      → record into playbook if recording
+  7. quickStrategyHint()        → suggest next step from known sequences
+
+POST-CALL (failure):
+  8. memory.appendError()       → record error pattern
+  9. backgroundResearch()       → async search for fix
+```
+
+### What's Missing in Layer 2
+
+| Gap | Impact | Solution |
+|---|---|---|
+| No documentation parser | Can't auto-ingest from official docs | Build doc-to-reference converter |
+| No YouTube tutorial extractor | Can't learn from video workflows | Extract steps from transcripts |
+| No community playbook sharing | Each user starts from scratch | Shared playbook repository |
+| No version tracking | References may not match app version | Add version field + detection |
+| No coverage map | Don't know which app areas are covered | Audit tool for reference completeness |
+| Few playbooks for pro tools | Only 3 DaVinci, 0 Premiere Pro, 0 Photoshop | Systematic recording campaigns |
+
+---
+
+## Layer 3: Awareness (PARTIAL)
+
+### What Exists
+
+| Component | File | Status |
+|---|---|---|
+| `StateObserver` | `src/runtime/state-observer.ts` | Built — wraps AX events, buffers up to 200 |
+| `PlanningLoop` | `src/runtime/planning-loop.ts` | Built — provides StateSnapshot |
+| `Observer Daemon` | `scripts/observer-daemon.ts` | Built — background capture + OCR, 2s interval |
+| `LocatorCache` | `src/runtime/locator-cache.ts` | Built — simple siteKey×actionKey → locator |
+
+### What's Missing
+
+| Component | Purpose | Why needed |
+|---|---|---|
+| World Model | Persistent per-session state: app, window, controls, dialogs, focus, scroll | Eliminates rediscovery on every call |
+| Perception Coordinator | Fuses AX events + CDP mutations + screenshot diff + OCR | Continuous awareness |
+| ROI OCR | Region-of-interest OCR (~100ms) instead of full-screen (~600ms) | Makes canvas-heavy apps practical |
+| Confidence scoring | How sure is the system about current state | Knows when to trust vs re-scan |
+
+---
+
+## Layer 4: Autonomy (PLANNED)
+
+### What Exists (Partial)
+
+| Component | File | Status |
+|---|---|---|
+| Agent loop | `src/agent/loop.ts` | Built — observe→decide→act per step, LLM every step |
+| Playbook engine | `src/playbook/engine.ts` | Built — deterministic step execution |
+| Execution contract | `src/runtime/execution-contract.ts` | Built — fallback chain with retry |
+| Supervisor | `src/supervisor/supervisor.ts` | Built — stall detection, recovery queue |
+
+### What's Missing
+
+| Component | Purpose | Why needed |
+|---|---|---|
+| Planner | Goal → subgoals → action plan with postconditions | Execute known workflows without LLM per step |
+| Plan Executor | Run plan steps, verify postconditions, trigger replan | Closed-loop execution |
+| Recovery Engine | Detect blockers, select strategy, execute recovery | Handle dialogs, focus loss, crashes |
+| Deterministic Runner | Execute playbook sequences at full speed without LLM | 10x speed for known workflows |
+
+---
+
+## Layer 5: Learning (PLANNED)
+
+### What Exists (Partial)
+
+| Component | File | Status |
+|---|---|---|
+| Memory service | `src/memory/service.ts` | Built — JSONL persistence, error/strategy recall |
+| Recall engine | `src/memory/recall.ts` | Built — strategy hints, error warnings |
+| Context tracker learning | `src/context-tracker.ts` | Built — auto-promotes selectors after 2+ successes |
+
+### What's Missing
+
+| Component | Purpose | Why needed |
+|---|---|---|
+| Locator policy | Track which selectors are stable per app×action | Prefer reliable selectors |
+| Sensor routing | Track which perception source works best per app | Don't waste time on AX for canvas apps |
+| Recovery policy | Track which recovery strategy works per blocker×app | Try best strategy first |
+| Adaptive timing | Track actual durations per tool×app | Replace fixed budgets with learned ones |
+| Failure prediction | Recognize pre-failure state patterns | Avoid failures before they happen |
+
+---
+
+## Layer 6: Tool Mastery (PLANNED)
+
+This is the highest-value layer. It's about systematically acquiring and scaling tool expertise.
+
+### Knowledge Sources (All Untapped)
+
+| Source | Volume | Quality | Extractable? |
+|---|---|---|---|
+| Official documentation | Thousands of pages per tool | High — authoritative | Yes — structured HTML/PDF |
+| Keyboard shortcut lists | 50-500 per tool | High — complete | Yes — tables, easy to parse |
+| YouTube tutorials | Millions of videos | Medium — varies | Yes — transcripts + timestamps |
+| Community forums | Millions of posts | Medium — noisy | Partially — filter by upvotes/accepted |
+| Plugin/extension APIs | Per tool | High | Yes — API docs |
+| Existing automation scripts | Per tool | High — battle-tested | Yes — convert to playbooks |
+| Expert screen recordings | Per workflow | Very high | Yes — with OCR + event logging |
+| Menu bar structure | Complete per app | High — authoritative | Yes — AX tree of menu bar |
+| Help center articles | Per tool | High | Yes — structured content |
+
+### What Systematic Ingestion Looks Like
+
+```
+DOCUMENTATION PIPELINE:
+  Official docs (HTML/PDF)
+    → Parser extracts: features, shortcuts, menu paths, UI terms
+    → Mapper converts to: reference JSON (selectors, shortcuts, flows)
+    → Validator tests: do these selectors/shortcuts actually work?
+    → Merge into: references/{tool}.json
+
+TUTORIAL PIPELINE:
+  YouTube tutorial (transcript + timestamps)
+    → Extractor identifies: action steps, UI targets, expected results
+    → Converter maps to: playbook steps with verification
+    → Validator tests: does this playbook execute successfully?
+    → Save to: playbooks/{tool}-{workflow}.json
+
+MENU DISCOVERY PIPELINE:
+  Launch app
+    → AX tree scan of entire menu bar
+    → Extract: all menu paths, keyboard shortcuts, enabled states
+    → Map to: reference JSON shortcuts + flows
+    → Already partially done for DaVinci Resolve (4 menu map files)
+
+EXPERT RECORDING PIPELINE:
+  Expert performs workflow with ScreenHand recording
+    → McpPlaybookRecorder captures: every tool call, params, results
+    → Post-processing: add verification steps, remove pauses, add variables
+    → Save to: playbooks/{tool}-{workflow}.json
+    → This already works — playbook_record tool exists
+
+COMMUNITY PIPELINE:
+  Users share playbooks
+    → Central repository of validated playbooks
+    → Version-tagged per app version
+    → Ranked by success rate and usage count
+    → Pull into: local playbooks/ on demand
+```
+
+### Coverage Target
+
+| Tool | Current References | Current Playbooks | Target References | Target Playbooks |
+|---|---|---|---|---|
+| Canva | 7 files (very rich) | 1 | 7 (good) | 20+ (design types, exports) |
+| DaVinci Resolve | 7 files (menus, shortcuts) | 3 | 7 (good) | 30+ (edit, color, fairlight, deliver) |
+| Premiere Pro | 0 | 0 | 3+ (shortcuts, menus, panels) | 20+ (edit, effects, export, proxies) |
+| After Effects | 0 | 0 | 3+ | 15+ |
+| Photoshop | 0 | 0 | 3+ | 20+ |
+| Figma | 1 | 0 | 3+ | 15+ |
+| Final Cut Pro | 0 | 0 | 3+ | 15+ |
+| Logic Pro | 0 | 0 | 2+ | 10+ |
+| Blender | 0 | 0 | 3+ | 20+ |
+| VS Code | 0 (codex-desktop only) | 1 | 2+ | 10+ |
+| Excel/Sheets | 0 | 0 | 2+ | 15+ |
+| Slack | 0 | 0 | 1+ | 5+ |
+| Chrome | 0 (browser tools exist) | 0 | 1+ | 10+ |
+| Social (X, LinkedIn, etc.) | 8 files | 6 playbooks | 8 (good) | 15+ |
+
+### How Layer 6 Feeds Everything Below
+
+```
+Layer 6 (Tool Mastery) produces:
+  ├── references/*.json     → Layer 2 (Tool Knowledge)
+  │     Selectors, shortcuts, flows, errors per app
+  │
+  ├── playbooks/*.json      → Layer 4 (Autonomy) via Planner
+  │     Deterministic execution plans for known workflows
+  │
+  ├── app profiles          → Layer 5 (Learning) cold start
+  │     "Premiere Pro is canvas-heavy, prefer OCR+shortcuts over AX for timeline"
+  │
+  └── coverage maps         → Layer 3 (Awareness)
+        "This app's toolbar is AX-accessible but canvas needs OCR"
+```
+
+---
+
+## How It All Connects
+
+### Tier 1/2 Example: Browser/Native App (High confidence)
+
+```
+USER: "Open Safari and navigate to example.com"
+
+Layer 4 (Autonomy):  Planner: focus Safari → Cmd+L → type URL → Enter
+Layer 3 (Awareness): World model: Safari active, address bar focused, URL loaded
+Layer 2 (Knowledge): Reference: address bar = AXTextField role "Address and Search"
+Layer 1 (Control):   AX focuses field, types URL, presses Enter
+
+Total: ~2-3s, 0 LLM calls, ~90% reliability
+```
+
+### Tier 3 Example: Pro App (Mixed confidence)
+
+```
+USER: "Export this Premiere Pro timeline as H.264 1080p"
+
+Layer 6 (Mastery):   Reference for Premiere Pro: Cmd+M = export, dialog selectors, format menu
+Layer 5 (Learning):  Knows Cmd+M is faster than File menu (learned). Export dialog controls
+                     are AX-accessible, but timeline is not.
+Layer 4 (Autonomy):  Planner: focus app → Cmd+M → set format → set preset → export
+                     NOTE: This works because the export dialog is standard AX UI,
+                     even though the timeline itself is canvas-heavy.
+Layer 3 (Awareness): World model tracks: export dialog open (AXSheet), format dropdown
+                     visible, "Export" button enabled. Confidence high for dialog,
+                     low for timeline state (canvas, not AX-readable).
+Layer 2 (Knowledge): Reference: export dialog = AXSheet, format = "Format" popup button
+Layer 1 (Control):   AX presses "Format" popup → selects "H.264" → presses "Export"
+
+Total: ~4-6s for dialog-based workflow, 0 LLM calls, ~75% reliability
+Limitation: cannot verify timeline content before export — that requires OCR/visual check
+Recovery: "Save Project?" dialog → auto-dismissed → continues
+```
+
+Tier 3 apps work well for **dialog/panel/menu workflows** (export, settings, file management). They are weaker for **workspace operations** (timeline editing, canvas manipulation, clip selection) where the core UI is not semantically exposed.
+
+---
+
+## Current State Summary
+
+```
+WHAT'S STRONG:
+  ✓ Layer 1 — 88 tools, 4 control methods, fallback chains, native bridges
+  ✓ Layer 2 — 38 references, 28 playbooks, intelligence wrapper, context tracker
+  ✓ Infrastructure — Memory, supervisor, jobs, playbooks, observer
+
+WHAT'S PARTIAL:
+  ~ Layer 3 — StateObserver + PlanningLoop exist but not wired into continuous perception
+  ~ Layer 4 — Agent loop + playbook engine exist but no planner or recovery engine
+  ~ Layer 5 — Memory records events but doesn't change future behavior
+
+WHAT'S MISSING:
+  ✗ Layer 3 — World model, perception coordinator, ROI OCR
+  ✗ Layer 4 — Planner, plan executor, recovery engine
+  ✗ Layer 5 — Locator/sensor/recovery policies, adaptive timing
+  ✗ Layer 6 — Knowledge ingestion pipelines, community playbooks, coverage tracking
+```
+
+---
+
+## Performance Targets (by App Tier)
+
+**Tier 1 (Browser) / Tier 2 (AX-native):**
+
+| Metric | Current | Target (after Layers 3-5) |
+|---|---|---|
+| AX/CDP action | ~10-50ms | ~10-50ms (same) |
+| Know screen state | 10-50ms per call | Near-zero (world model current) |
+| 10-step known workflow | ~5s + 10 LLM calls | ~2-3s + 0 LLM calls |
+| 10-step novel workflow | ~30s + 10 LLM calls | ~12s + 2-3 LLM calls |
+| Dialog recovery | Manual (minutes) | ~1-2s auto |
+| Success rate | ~80% | ~90-95% |
+
+**Tier 3 (Hybrid pro apps — Premiere Pro, DaVinci, Photoshop):**
+
+| Metric | Current | Target (after Layers 3-6) |
+|---|---|---|
+| Panel/dialog actions | ~50ms (AX) | ~50ms (same) |
+| Canvas/workspace read | ~600ms (full OCR) | ~100-200ms (ROI OCR) |
+| 10-step dialog workflow | ~8s + 10 LLM calls | ~4-6s + 0-1 LLM calls |
+| 10-step workspace workflow | ~15s + many OCR | ~8-10s + ROI OCR |
+| Dialog recovery | Manual | ~2-3s auto |
+| Success rate (dialogs) | ~65% | ~80-85% |
+| Success rate (workspace) | ~40% | ~60-70% |
+
+**System-wide:**
+
+| Metric | Current | Target |
+|---|---|---|
+| Memory footprint | ~30MB | ~80-100MB |
+| Background CPU (with perception) | ~0% | ~3-5% |
+
+These targets are per-tier, not platform-wide promises. Tier 3 workspace improvements depend heavily on per-app reference quality and ROI OCR accuracy.
+
+---
 
 ## File Map
 
 ```
-mcp-desktop.ts              ← Canonical MCP server (50+ tools)
-src/memory/service.ts        ← MemoryService (unified facade)
-src/memory/store.ts          ← JSONL persistence + caching
-src/memory/session.ts        ← Session tracking + auto-save
-src/memory/recall.ts         ← Strategy/error recall engine
-src/supervisor/supervisor.ts ← SessionSupervisor
-src/supervisor/locks.ts      ← LeaseManager (filesystem locks)
-src/supervisor/types.ts      ← Supervisor types
-src/runtime/execution-contract.ts ← Fallback chain + retry policy
-src/runtime/                 ← Service + adapters
-src/native/                  ← BridgeClient
-src/agent/                   ← Autonomous agent loop
-src/playbook/                ← Playbook engine + recorder
-scripts/                     ← Daemon, watchers, ops scripts
-native/                      ← Swift + C# native bridge source
-profiles/                    ← Client instruction profiles
+mcp-desktop.ts                       ← Main MCP server (88 tools, intelligence wrapper)
+mcp-bridge.ts                        ← Bridge-only server (17 tools)
+src/mcp-entry.ts                     ← Modular server (adapter selection)
+
+src/runtime/
+  service.ts                         ← AutomationRuntimeService
+  session-manager.ts                 ← Resilient session re-attach
+  executor.ts                        ← Locate → act → verify pipeline
+  execution-contract.ts              ← Fallback chain + retry policy
+  accessibility-adapter.ts           ← macOS AX API
+  cdp-chrome-adapter.ts              ← Chrome DevTools Protocol
+  composite-adapter.ts               ← Routes to AX or CDP per app
+  applescript-adapter.ts             ← Scriptable macOS apps
+  vision-adapter.ts                  ← OCR-based fallback
+  state-observer.ts                  ← AX event buffering (Layer 3 groundwork)
+  planning-loop.ts                   ← State snapshots (Layer 3 groundwork)
+  locator-cache.ts                   ← Simple locator cache (Layer 5 groundwork)
+  app-adapter.ts                     ← Adapter interface
+
+src/memory/
+  service.ts                         ← MemoryService (unified facade)
+  store.ts                           ← JSONL persistence + caching
+  recall.ts                          ← Strategy/error recall engine
+  session.ts                         ← Session tracking + auto-save
+  types.ts                           ← Memory data types
+
+src/context-tracker.ts               ← Auto-loads references, learns selectors
+src/supervisor/                      ← Lease management, stall detection
+src/playbook/                        ← Playbook engine + recorder
+src/jobs/                            ← Multi-step job system
+src/observer/                        ← Observer state reading
+src/agent/                           ← Autonomous agent loop
+src/native/                          ← Bridge client (JSON-RPC)
+src/logging/                         ← Timeline logger
+
+native/macos-bridge/                 ← Swift accessibility bridge
+native/windows-bridge/               ← C# .NET 8 bridge
+
+references/                          ← 38 curated tool knowledge files
+playbooks/                           ← 28 executable workflow files
+profiles/                            ← Client instruction profiles
+scripts/                             ← Daemons, watchers, ops scripts
+
+PLANNED:
+  src/state/                         ← World model (Layer 3)
+  src/perception/                    ← Continuous perception (Layer 3)
+  src/planner/                       ← Goal planning (Layer 4)
+  src/recovery/                      ← Self-healing (Layer 4)
+  src/learning/                      ← Policy learning (Layer 5)
+  src/ingestion/                     ← Knowledge ingestion (Layer 6)
 ```
+
+---
+
+## License
+
+AGPL-3.0-only — Copyright (C) 2025 Clazro Technology Private Limited

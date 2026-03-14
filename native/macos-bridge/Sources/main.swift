@@ -253,6 +253,10 @@ func dispatch(method: String, params: [String: AnyCodable]?) throws -> Any {
         let windowId: Int = try requiredParam(params, "windowId")
         return try coreGraphicsBridge.captureWindow(windowId: windowId)
 
+    case "cg.captureWindowBuffer":
+        let windowId: Int = try requiredParam(params, "windowId")
+        return try coreGraphicsBridge.captureWindowBuffer(windowId: windowId)
+
     case "cg.scroll":
         let x: Double = try requiredParam(params, "x")
         let y: Double = try requiredParam(params, "y")
@@ -270,6 +274,11 @@ func dispatch(method: String, params: [String: AnyCodable]?) throws -> Any {
     case "vision.ocr":
         let imagePath: String = try requiredParam(params, "imagePath")
         return try visionBridge.ocr(imagePath: imagePath)
+
+    case "vision.ocrRegion":
+        let windowId: Int = try requiredParam(params, "windowId")
+        let region: [String: Double] = try requiredParam(params, "region")
+        return try visionBridge.ocrRegion(windowId: windowId, region: region)
 
     default:
         throw BridgeError.general("Unknown method: \(method)")

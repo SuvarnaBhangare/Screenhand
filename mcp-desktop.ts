@@ -54,15 +54,30 @@ import { PlaybookEngine } from "./src/playbook/engine.js";
 import { PlaybookStore } from "./src/playbook/store.js";
 import { ContextTracker } from "./src/context-tracker.js";
 import { McpPlaybookRecorder } from "./src/playbook/mcp-recorder.js";
+import { WorldModel } from "./src/state/index.js";
+import { PerceptionManager } from "./src/perception/index.js";
+import { Planner, PlanExecutor, GoalStore, ToolRegistry } from "./src/planner/index.js";
+import { RecoveryEngine } from "./src/recovery/index.js";
+import { LearningEngine } from "./src/learning/index.js";
+import type { ExecutionPause } from "./src/planner/index.js";
 import { discoverWebElements, testWebElement, compileReference, saveExploreResult, discoverNativeElements } from "./src/platform/explorer.js";
 import { buildDocUrls, crawlPage, compileLearnResult, saveLearnResult } from "./src/platform/learner.js";
 import { AccessibilityAdapter } from "./src/runtime/accessibility-adapter.js";
 import { AutomationRuntimeService } from "./src/runtime/service.js";
+import { LocatorCache } from "./src/runtime/locator-cache.js";
 import { TimelineLogger } from "./src/logging/timeline-logger.js";
-import { readObserverState, getObserverDaemonPid } from "./src/observer/state.js";
+import { readObserverState, getObserverDaemonPid, submitObserverCommand, getObserverCommand } from "./src/observer/state.js";
 import { OBSERVER_DIR, OBSERVER_PID_FILE, OBSERVER_LOG_FILE } from "./src/observer/types.js";
 import { spawn } from "node:child_process";
 import os from "node:os";
+import { MenuScanner } from "./src/ingestion/menu-scanner.js";
+import { DocParser } from "./src/ingestion/doc-parser.js";
+import { TutorialExtractor } from "./src/ingestion/tutorial-extractor.js";
+import type { TranscriptSegment } from "./src/ingestion/tutorial-extractor.js";
+import { CoverageAuditor } from "./src/ingestion/coverage-auditor.js";
+import { ReferenceMerger } from "./src/ingestion/reference-merger.js";
+import { PlaybookPublisher } from "./src/community/publisher.js";
+import { PlaybookFetcher } from "./src/community/fetcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,7 +104,11 @@ const bridge = new BridgeClient(bridgePath);
 let bridgeReady = false;
 
 async function ensureBridge() {
-  if (!bridgeReady) { await bridge.start(); bridgeReady = true; }
+  if (!bridgeReady) {
+    await bridge.start();
+    bridgeReady = true;
+    perceptionManager.createSources(bridge);
+  }
 }
 
 // CDP connection cache
@@ -142,7 +161,22 @@ const referencesDir = path.resolve(__dirname, "references");
 const _playbookStoreForContext = new PlaybookStore(referencesDir);
 _playbookStoreForContext.load();
 const contextTracker = new ContextTracker(_playbookStoreForContext, path.resolve(__dirname, "playbooks"));
+const worldModel = new WorldModel();
+const perceptionManager = new PerceptionManager(worldModel);
+const learningEngine = new LearningEngine();
+learningEngine.init();
+const planner = new Planner(_playbookStoreForContext, memory, contextTracker, worldModel, learningEngine);
+const goalStore = new GoalStore(path.join(os.homedir(), ".screenhand", "planner"));
+goalStore.init();
+const toolRegistry = new ToolRegistry();
+const recoveryEngine = new RecoveryEngine(worldModel, toolRegistry.toExecutor(), memory);
+recoveryEngine.setLearningEngine(learningEngine);
+planner.setToolRegistry(toolRegistry);
+perceptionManager.setLearningEngine(learningEngine);
 const mcpRecorder = new McpPlaybookRecorder(path.resolve(__dirname, "playbooks"));
+const referenceMerger = new ReferenceMerger(referencesDir);
+const communityPublisher = new PlaybookPublisher();
+const communityFetcher = new PlaybookFetcher();
 
 // Tools excluded from the intelligence wrapper (memory/context hints).
 // Memory, supervisor, job, and daemon lifecycle tools skip the wrapper to avoid recursion
@@ -162,16 +196,36 @@ const MEMORY_TOOLS = new Set([
   "job_run", "job_run_all",
   "worker_start", "worker_stop", "worker_status",
   "job_create_chain",
-  "observer_start", "observer_stop", "observer_status",
+  "observer_start", "observer_stop", "observer_status", "observer_ocr_roi",
   "orchestrator_start", "orchestrator_stop", "orchestrator_submit", "orchestrator_status",
+  "world_state", "world_state_diff", "perception_status", "perception_start", "perception_stop",
+  "learning_status", "learning_reset",
+  "plan_goal", "plan_execute", "plan_step", "plan_step_resolve", "plan_status", "plan_list", "plan_cancel",
+  "recovery_status", "recovery_configure",
+  "community_publish", "community_fetch",
 ]);
 
 // Track the strategy we're currently following (for feedback loop)
 let activeStrategyFingerprint: string | null = null;
 
+// Adaptive budget for the current tool call — set by intelligence wrapper, read by fallback tools
+import type { AdaptiveBudget } from "./src/learning/types.js";
+let currentAdaptiveBudget: AdaptiveBudget | null = null;
+
 // Intercept all tool registrations to auto-log + auto-recall
-const originalTool = server.tool.bind(server);
+const _rawOriginalTool = server.tool.bind(server);
 type ToolArgs = Parameters<typeof server.tool>;
+
+// Wrap originalTool to also register handlers in the tool registry
+const originalTool = ((...args: any[]) => {
+  const handlerIdx = args.findIndex((a: any) => typeof a === "function");
+  if (handlerIdx !== -1) {
+    const name = args[0] as string;
+    const handler = args[handlerIdx] as Function;
+    toolRegistry.register(name, (params: Record<string, unknown>) => handler(params, {}));
+  }
+  return (_rawOriginalTool as any)(...args);
+}) as typeof _rawOriginalTool;
 
 function extractText(result: any): string {
   if (!result?.content) return "";
@@ -189,6 +243,9 @@ function extractText(result: any): string {
   const originalHandler = args[handlerIdx] as Function;
   const toolName = args[0] as string;
 
+  // Register the original (unwrapped) handler for internal tool dispatch
+  toolRegistry.register(toolName, (params: Record<string, unknown>) => originalHandler(params, {}));
+
   const wrappedHandler = async (params: any, extra: any) => {
     // Skip intercepting memory tools to avoid recursion
     if (MEMORY_TOOLS.has(toolName)) {
@@ -199,12 +256,30 @@ function extractText(result: any): string {
     const safeParams = typeof params === "object" && params !== null ? params : {};
     const start = Date.now();
 
+    // ── PRE-CALL: lazy-init world model on first session ──
+    if (sessionId && worldModel.getState().sessionId !== sessionId) {
+      worldModel.init(sessionId);
+    }
+
     // ── PRE-CALL: check for known error warnings (~0ms, in-memory) ──
     const knownError = memory.quickErrorCheck(toolName);
 
     // ── PRE-CALL: update context tracker (fires playbook lookup only on domain change) ──
     contextTracker.updateContext(toolName, safeParams);
     const playbookHints = contextTracker.getHints(toolName, safeParams);
+
+    // ── PRE-CALL: compute adaptive budget from learning engine ──
+    const budgetBundleId = worldModel.getState().focusedApp?.bundleId;
+    if (budgetBundleId) {
+      const budget = learningEngine.getAdaptiveBudget(budgetBundleId);
+      if (budget.locateMs !== 800 || budget.actMs !== 200 || budget.verifyMs !== 2000) {
+        currentAdaptiveBudget = budget;
+      } else {
+        currentAdaptiveBudget = null;
+      }
+    } else {
+      currentAdaptiveBudget = null;
+    }
 
     try {
       const result = await originalHandler(params, extra);
@@ -227,6 +302,34 @@ function extractText(result: any): string {
       // ── POST-CALL: record success for playbook learning (in-memory only) ──
       contextTracker.recordOutcome(toolName, safeParams, true, null);
 
+      // ── POST-CALL: feed learning engine (timing + locator outcomes) ──
+      const learnBundleId = worldModel.getState().focusedApp?.bundleId ?? "unknown";
+      learningEngine.recordToolTiming({ tool: toolName, bundleId: learnBundleId, durationMs, success: true });
+
+      // Record locator outcome if the tool used a target/selector
+      const locatorTarget = safeParams.target ?? safeParams.selector ?? safeParams.text ?? safeParams.locator;
+      if (typeof locatorTarget === "string" && locatorTarget) {
+        const method = toolName.startsWith("browser_") ? "cdp" as const
+          : toolName.includes("ocr") ? "ocr" as const
+          : "ax" as const;
+        learningEngine.recordLocatorOutcome({
+          bundleId: learnBundleId,
+          actionKey: toolName,
+          locator: locatorTarget,
+          method,
+          success: true,
+        });
+
+        // Auto-record verified pattern to patterns.jsonl via learning engine
+        learningEngine.recordPattern({
+          bundleId: learnBundleId,
+          tool: toolName,
+          locator: locatorTarget,
+          method,
+          success: true,
+        });
+      }
+
       // ── POST-CALL: capture for playbook recording if active ──
       if (mcpRecorder.isRecording) {
         const resultText = Array.isArray(result?.content) ? result.content.map((c: any) => c.text ?? "").join(" ").substring(0, 500) : "";
@@ -239,6 +342,27 @@ function extractText(result: any): string {
       // Playbook-aware hints (errors, selectors, job suggestions)
       for (const h of playbookHints) {
         hints.push(h);
+      }
+
+      // World model summary (window/control state)
+      const wmSummary = worldModel.toSummary();
+      if (wmSummary && worldModel.getState().windows.size > 0) {
+        hints.push(`World: ${wmSummary.split("\n")[0]}`);
+      }
+
+      // Perception freshness
+      if (perceptionManager.isRunning) {
+        hints.push(perceptionManager.getFreshnessSummary());
+      }
+
+      // Learning engine recommendations
+      const learnLocator = learningEngine.recommendLocator(learnBundleId, toolName);
+      if (learnLocator) {
+        hints.push(`Learning: best locator for ${toolName} → "${learnLocator.locator}" (${learnLocator.method}, ${learnLocator.score.toFixed(2)} score, ${learnLocator.successCount}/${learnLocator.successCount + learnLocator.failCount} success)`);
+      }
+      const adaptiveBudget = learningEngine.getAdaptiveBudget(learnBundleId);
+      if (adaptiveBudget.locateMs !== 800 || adaptiveBudget.actMs !== 200 || adaptiveBudget.verifyMs !== 2000) {
+        hints.push(`Learning: adaptive budgets → locate=${adaptiveBudget.locateMs}ms, act=${adaptiveBudget.actMs}ms, verify=${adaptiveBudget.verifyMs}ms`);
       }
 
       // Warn about known errors for this tool (from memory)
@@ -303,6 +427,33 @@ function extractText(result: any): string {
       // ── Record failure for playbook learning (in-memory only) ──
       contextTracker.recordOutcome(toolName, safeParams, false, errorMsg);
 
+      // ── Feed learning engine (failure timing + locator) ──
+      const learnBundleIdErr = worldModel.getState().focusedApp?.bundleId ?? "unknown";
+      learningEngine.recordToolTiming({ tool: toolName, bundleId: learnBundleIdErr, durationMs, success: false });
+
+      const failedLocator = safeParams.target ?? safeParams.selector ?? safeParams.text ?? safeParams.locator;
+      if (typeof failedLocator === "string" && failedLocator) {
+        const method = toolName.startsWith("browser_") ? "cdp" as const
+          : toolName.includes("ocr") ? "ocr" as const
+          : "ax" as const;
+        learningEngine.recordLocatorOutcome({
+          bundleId: learnBundleIdErr,
+          actionKey: toolName,
+          locator: failedLocator,
+          method,
+          success: false,
+        });
+
+        // Record failed pattern to patterns.jsonl
+        learningEngine.recordPattern({
+          bundleId: learnBundleIdErr,
+          tool: toolName,
+          locator: failedLocator,
+          method,
+          success: false,
+        });
+      }
+
       // ── Capture failure for playbook recording ──
       if (mcpRecorder.isRecording) {
         mcpRecorder.captureToolCall(toolName, safeParams, false, errorMsg, durationMs);
@@ -336,6 +487,8 @@ function extractText(result: any): string {
       }
 
       throw err;
+    } finally {
+      currentAdaptiveBudget = null;
     }
   };
 
@@ -372,6 +525,16 @@ server.tool("focus", "Focus/activate an application", {
 }, async ({ bundleId }) => {
   await ensureBridge();
   await bridge.call("app.focus", { bundleId });
+  // Feed world model + auto-start perception for focused app
+  try {
+    const apps = await bridge.call<any[]>("app.list", {});
+    const app = apps?.find((a: any) => a.bundleId === bundleId);
+    if (app) {
+      const ctx = { bundleId, appName: app.name ?? bundleId, pid: app.pid, windowTitle: "" };
+      worldModel.updateFocusedApp(ctx);
+      await perceptionManager.ensureStarted(ctx);
+    }
+  } catch { /* world model + perception update is best-effort */ }
   return { content: [{ type: "text", text: "Focused " + bundleId }] };
 });
 
@@ -380,6 +543,10 @@ server.tool("launch", "Launch an application", {
 }, async ({ bundleId }) => {
   await ensureBridge();
   const r = await bridge.call<any>("app.launch", { bundleId });
+  // Auto-start perception for the launched app
+  try {
+    await perceptionManager.ensureStarted({ bundleId, appName: r.appName ?? bundleId, pid: r.pid, windowTitle: "" });
+  } catch { /* perception start is best-effort */ }
   return { content: [{ type: "text", text: `Launched ${r.appName} pid=${r.pid}` }] };
 });
 
@@ -398,6 +565,25 @@ server.tool("screenshot", "Take a screenshot and OCR it. Returns all visible tex
     shot = await bridge.call<any>("cg.captureScreen");
   }
   const ocr = await bridge.call<any>("vision.ocr", { imagePath: shot.path });
+
+  // Feed OCR regions into world model
+  try {
+    if (windowId && Array.isArray(ocr.regions) && ocr.regions.length > 0) {
+      worldModel.ingestOCRRegions(
+        windowId,
+        ocr.regions.map((r: any) => ({
+          text: r.text,
+          bounds: {
+            x: r.bounds.x,
+            y: r.bounds.y,
+            width: r.bounds.width,
+            height: r.bounds.height,
+          },
+        })),
+      );
+    }
+  } catch { /* world model update is best-effort */ }
+
   return { content: [{ type: "text", text: `Screenshot: ${shot.width}x${shot.height} (${shot.path})\n\n${ocr.text}` }] };
 });
 
@@ -435,6 +621,24 @@ server.tool("ocr", "OCR a window with element positions. SLOW — prefer ui_tree
 
   const regions = ocr.regions.map((r: any) => `"${r.text}" (${Math.round(r.bounds.x)},${Math.round(r.bounds.y)}) ${Math.round(r.bounds.width)}x${Math.round(r.bounds.height)}`);
 
+  // Feed OCR regions into world model
+  try {
+    if (windowId && Array.isArray(ocr.regions) && ocr.regions.length > 0) {
+      worldModel.ingestOCRRegions(
+        windowId,
+        ocr.regions.map((r: any) => ({
+          text: r.text,
+          bounds: {
+            x: r.bounds.x,
+            y: r.bounds.y,
+            width: r.bounds.width,
+            height: r.bounds.height,
+          },
+        })),
+      );
+    }
+  } catch { /* world model update is best-effort */ }
+
   return {
     content: [{
       type: "text",
@@ -459,6 +663,21 @@ server.tool("ui_tree", "PREFERRED: Get the full UI element tree of an app via Ac
   await ensureBridge();
   const tree = await bridge.call<any>("ax.getElementTree", { pid, maxDepth: maxDepth || 4 });
 
+  // Feed AX tree into world model for state tracking
+  try {
+    const wins = await bridge.call<any[]>("window.list", {});
+    const win = wins?.find((w: any) => w.pid === pid);
+    if (win) {
+      worldModel.ingestAXTree(win.windowId, tree, {
+        bundleId: win.bundleId ?? "",
+        appName: win.bundleId ?? "",
+        pid,
+        windowTitle: win.title ?? "",
+        windowId: win.windowId,
+      });
+    }
+  } catch { /* ignore — world model update is best-effort */ }
+
   function format(node: any, depth: number): string {
     let line = "  ".repeat(depth) + (node.role || "?");
     if (node.title) line += ` "${node.title}"`;
@@ -480,6 +699,36 @@ server.tool("ui_find", "Find a specific UI element by text/title. Returns its ro
 }, async ({ pid, title }) => {
   await ensureBridge();
   const r = await bridge.call<any>("ax.findElement", { pid, title, exact: false });
+
+  // Feed found element into world model as a minimal AX subtree
+  try {
+    if (r && r.role) {
+      const wins = await bridge.call<any[]>("window.list", {});
+      const win = wins?.find((w: any) => w.pid === pid);
+      if (win) {
+        const subtree: any = {
+          role: r.role,
+          title: r.title ?? null,
+          value: r.value ?? null,
+          enabled: r.enabled ?? true,
+          focused: r.focused ?? false,
+          children: r.children ?? [],
+        };
+        if (r.bounds) {
+          subtree.position = { x: r.bounds.x, y: r.bounds.y };
+          subtree.size = { width: r.bounds.width, height: r.bounds.height };
+        }
+        worldModel.ingestAXTree(win.windowId, subtree, {
+          bundleId: win.bundleId ?? "",
+          appName: win.bundleId ?? "",
+          pid,
+          windowTitle: win.title ?? "",
+          windowId: win.windowId,
+        });
+      }
+    }
+  } catch { /* world model update is best-effort */ }
+
   return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
 });
 
@@ -607,6 +856,8 @@ async function getCDPClient(tabId?: string, overridePort?: number): Promise<{ cl
     targetId = page.id;
   }
   const client = await cdp({ port, target: targetId });
+  // Activate CDP source in perception when a browser connection is established
+  try { perceptionManager.activateCDP(client); } catch { /* best-effort */ }
   return { client, targetId: targetId!, CDP: cdp, port };
 }
 
@@ -635,6 +886,13 @@ server.tool("browser_open", "Open a URL in Chrome/Electron (creates new tab)", {
 }, async ({ url, cdpPort: portOverride }) => {
   const { CDP: cdp, port } = await ensureCDP(portOverride);
   const target = await cdp.New({ port, url });
+
+  // Feed new tab into world model
+  try {
+    const browserBundleId = worldModel.getState().focusedApp?.bundleId ?? "com.google.Chrome";
+    worldModel.ingestCDPSnapshot(browserBundleId, url, target.title ?? url);
+  } catch { /* world model update is best-effort */ }
+
   return { content: [{ type: "text", text: `Opened: ${target.id} — ${url}` }] };
 });
 
@@ -661,9 +919,17 @@ server.tool("browser_navigate", "Navigate the active Chrome/Electron tab to a UR
     if (r.result.value === "complete" || r.result.value === "interactive") break;
     await new Promise(r => setTimeout(r, 200));
   }
-  const title = await client.Runtime.evaluate({ expression: "document.title", returnByValue: true });
+  const titleResult = await client.Runtime.evaluate({ expression: "document.title", returnByValue: true });
+  const pageTitle = titleResult.result.value ?? "";
   await client.close();
-  return { content: [{ type: "text", text: `Navigated to: ${title.result.value}` }] };
+
+  // Feed navigation result into world model
+  try {
+    const browserBundleId = worldModel.getState().focusedApp?.bundleId ?? "com.google.Chrome";
+    worldModel.ingestCDPSnapshot(browserBundleId, url, pageTitle);
+  } catch { /* world model update is best-effort */ }
+
+  return { content: [{ type: "text", text: `Navigated to: ${pageTitle}` }] };
 });
 
 server.tool("browser_js", "Execute JavaScript in a Chrome/Electron tab. Returns the result. WARNING: This runs arbitrary JS in the browser context — avoid on sensitive pages (banking, email). All executions are audit-logged.", {
@@ -732,6 +998,20 @@ server.tool("browser_dom", "Query the DOM of a Chrome/Electron page. Returns mat
     })()`,
     returnByValue: true,
   });
+
+  // Feed page info into world model while client is still open
+  try {
+    const pageInfo = await client.Runtime.evaluate({
+      expression: `({ url: location.href, title: document.title })`,
+      returnByValue: true,
+    });
+    const info = pageInfo.result.value;
+    if (info?.url) {
+      const browserBundleId = worldModel.getState().focusedApp?.bundleId ?? "com.google.Chrome";
+      worldModel.ingestCDPSnapshot(browserBundleId, info.url, info.title ?? "");
+    }
+  } catch { /* world model update is best-effort */ }
+
   await client.close();
 
   return { content: [{ type: "text", text: JSON.stringify(result.result.value, null, 2) }] };
@@ -871,6 +1151,16 @@ server.tool("browser_page_info", "Get current page title, URL, and text content 
     returnByValue: true,
   });
   await client.close();
+
+  // Feed page info into world model
+  try {
+    const info = result.result.value;
+    if (info?.url) {
+      const browserBundleId = worldModel.getState().focusedApp?.bundleId ?? "com.google.Chrome";
+      worldModel.ingestCDPSnapshot(browserBundleId, info.url, info.title ?? "");
+    }
+  } catch { /* world model update is best-effort */ }
+
   return { content: [{ type: "text", text: JSON.stringify(result.result.value, null, 2) }] };
 });
 
@@ -1027,6 +1317,7 @@ server.tool("browser_human_click", "Alias for browser_click — both use realist
 // ═══════════════════════════════════════════════
 
 const playbooksDir = path.resolve(__dirname, "playbooks");
+const coverageAuditor = new CoverageAuditor(referencesDir, playbooksDir, learningEngine, goalStore);
 
 server.tool("platform_guide", "Get automation guide for a platform (selectors, URLs, flows, error solutions). Reads from references/ (curated knowledge). Zero cost — only loads when called.", {
   platform: z.string().describe("Platform name, e.g. 'figma', 'x-twitter', 'devpost'"),
@@ -2161,7 +2452,7 @@ import {
   planExecution,
   executeWithFallback,
 } from "./src/runtime/execution-contract.js";
-import type { ExecutionMethod, ActionResult } from "./src/runtime/execution-contract.js";
+import type { ExecutionMethod, ActionResult, RetryPolicy } from "./src/runtime/execution-contract.js";
 
 server.tool("execution_plan", "Show the execution plan for an action type. Returns the ordered fallback chain based on available infrastructure.", {
   action: z.enum(["click", "type", "read", "locate", "select", "scroll"]).describe("Action type"),
@@ -2171,7 +2462,13 @@ server.tool("execution_plan", "Show the execution plan for an action type. Retur
     const cap = METHOD_CAPABILITIES[method];
     return `${i + 1}. ${method} (~${cap.avgLatencyMs}ms)${i === 0 ? " ← primary" : ""}`;
   });
-  lines.push("", `Retry policy: ${DEFAULT_RETRY_POLICY.maxRetriesPerMethod}/method, ${DEFAULT_RETRY_POLICY.maxTotalRetries} total, escalate after ${DEFAULT_RETRY_POLICY.escalateAfter}`);
+  const policy = getAdaptedRetryPolicy();
+  lines.push("", `Retry policy: ${policy.maxRetriesPerMethod}/method, ${policy.maxTotalRetries} total, escalate after ${policy.escalateAfter}, delay ${policy.delayBetweenRetriesMs}ms`);
+  const appBundleId = worldModel.getState().focusedApp?.bundleId;
+  if (appBundleId) {
+    const budget = learningEngine.getAdaptiveBudget(appBundleId);
+    lines.push(`Adaptive budgets: locate=${budget.locateMs}ms, act=${budget.actMs}ms, verify=${budget.verifyMs}ms`);
+  }
   return { content: [{ type: "text" as const, text: `Execution plan for "${action}":\n${lines.join("\n")}` }] };
 });
 
@@ -2198,6 +2495,23 @@ function infra() {
   return { hasBridge: true, hasCDP: cdpPort !== null };
 }
 
+/**
+ * Get a retry policy adapted by the learning engine's adaptive budgets.
+ * If the learning engine shows the current app responds quickly, reduce retry delays.
+ */
+function getAdaptedRetryPolicy(): RetryPolicy {
+  if (!currentAdaptiveBudget) return DEFAULT_RETRY_POLICY;
+  // Use the max of locate+act as a guide for retry delay — faster apps need shorter delays
+  const typicalMs = Math.max(currentAdaptiveBudget.locateMs, currentAdaptiveBudget.actMs);
+  // Retry delay = max(100ms, typical * 1.5), capped at the default
+  const adaptedDelay = Math.min(
+    DEFAULT_RETRY_POLICY.delayBetweenRetriesMs,
+    Math.max(100, Math.ceil(typicalMs * 1.5)),
+  );
+  if (adaptedDelay === DEFAULT_RETRY_POLICY.delayBetweenRetriesMs) return DEFAULT_RETRY_POLICY;
+  return { ...DEFAULT_RETRY_POLICY, delayBetweenRetriesMs: adaptedDelay };
+}
+
 function formatResult(action: string, target: string, result: ActionResult): { content: Array<{ type: "text"; text: string }> } {
   if (result.ok) {
     const fallbackNote = result.fallbackFrom ? ` (fell back from ${result.fallbackFrom})` : "";
@@ -2219,7 +2533,7 @@ server.tool("click_with_fallback", "Click a target by text using the canonical f
 
   const targetPid = await resolvePid(bundleId);
 
-  const result = await executeWithFallback("click", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("click", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       switch (method) {
@@ -2301,7 +2615,7 @@ server.tool("type_with_fallback", "Type text into a target field using the canon
   const plan = planExecution("type", infra());
   const targetPid = await resolvePid(bundleId);
 
-  const result = await executeWithFallback("type", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("type", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       switch (method) {
@@ -2372,7 +2686,7 @@ server.tool("read_with_fallback", "Read text content from the screen or a specif
   const plan = planExecution("read", infra());
   const targetPid = await resolvePid(bundleId);
 
-  const result = await executeWithFallback("read", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("read", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       switch (method) {
@@ -2465,7 +2779,7 @@ server.tool("locate_with_fallback", "Find an element's position on screen using 
   const plan = planExecution("locate", infra());
   const targetPid = await resolvePid(bundleId);
 
-  const result = await executeWithFallback("locate", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("locate", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       switch (method) {
@@ -2537,7 +2851,7 @@ server.tool("select_with_fallback", "Select an option from a dropdown/menu using
   const plan = planExecution("select", infra());
   const targetPid = await resolvePid(bundleId);
 
-  const result = await executeWithFallback("select", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("select", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       switch (method) {
@@ -2640,7 +2954,7 @@ server.tool("scroll_with_fallback", "Scroll within an element or the active wind
   }
 
   // Fixed-amount scroll via fallback chain
-  const result = await executeWithFallback("scroll", plan, DEFAULT_RETRY_POLICY, async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
+  const result = await executeWithFallback("scroll", plan, getAdaptedRetryPolicy(), async (method: ExecutionMethod, attempt: number): Promise<ActionResult> => {
     const start = Date.now();
     try {
       const deltaX = direction === "left" ? -scrollAmount : direction === "right" ? scrollAmount : 0;
@@ -2979,7 +3293,9 @@ function getJobRunner(): JobRunner {
     // Build playbook engine stack: adapter → runtime → engine
     const adapter = new AccessibilityAdapter(bridge);
     const logger = new TimelineLogger();
-    const runtimeService = new AutomationRuntimeService(adapter, logger);
+    const locCache = new LocatorCache();
+    locCache.setLearningEngine(learningEngine);
+    const runtimeService = new AutomationRuntimeService(adapter, logger, locCache);
     const playbookEngine = new PlaybookEngine(runtimeService);
     activePlaybookEngine = playbookEngine;
     // Wire CDP into playbook engine for browser_js / cdp_key_event steps
@@ -3152,6 +3468,415 @@ originalTool("worker_status", "Get the current status of the worker daemon (read
   lines.push("", `Log: ${WORKER_LOG_FILE}`);
 
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+// ═══════════════════════════════════════════════
+// PLANNER — goal-oriented planning
+// ═══════════════════════════════════════════════
+
+originalTool("plan_goal", "Create a goal and generate an execution plan. Returns the plan source (playbook/strategy/llm), steps, and confidence. Does NOT execute — use the returned plan for review or pass to job system.", {
+  goal: z.string().describe("What you want to achieve (e.g. 'Export Premiere Pro timeline as H.264')"),
+}, async ({ goal: goalDescription }) => {
+  const goal = planner.createGoal(goalDescription);
+  await planner.planGoal(goal);
+  goalStore.add(goal);
+
+  const sg = goal.subgoals[0]!;
+  const plan = sg.plan;
+
+  if (!plan) {
+    return { content: [{ type: "text" as const, text: "No plan could be generated." }] };
+  }
+
+  const lines = [
+    `Goal: ${goalDescription}`,
+    `Plan source: ${plan.source}${plan.sourceId ? ` (${plan.sourceId})` : ""}`,
+    `Confidence: ${(plan.confidence * 100).toFixed(0)}%`,
+    `Steps: ${plan.steps.length}`,
+    "",
+  ];
+
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i]!;
+    const params = Object.keys(step.params).length > 0
+      ? ` ${JSON.stringify(step.params)}`
+      : "";
+    const llmTag = step.requiresLLM ? " [LLM]" : "";
+    const postcond = step.expectedPostcondition
+      ? ` → verify: ${step.expectedPostcondition.type}(${step.expectedPostcondition.target})`
+      : "";
+    lines.push(`  ${i + 1}. ${step.tool || step.description}${params}${llmTag}${postcond}`);
+  }
+
+  lines.push("", `Goal ID: ${goal.id}`);
+
+  return {
+    content: [{ type: "text" as const, text: lines.join("\n") }],
+    _meta: { goalId: goal.id, plan },
+  };
+});
+
+originalTool("plan_execute", "Execute a goal's plan automatically. Runs deterministic steps internally. Pauses at LLM steps and returns the step description for you to resolve with plan_step_resolve. On completion, saves the strategy to memory for future reuse.", {
+  goalId: z.string().describe("Goal ID from plan_goal"),
+}, async ({ goalId }) => {
+  const goal = goalStore.get(goalId);
+  if (!goal) {
+    return { content: [{ type: "text" as const, text: `Goal not found: ${goalId}` }] };
+  }
+
+  const executor = new PlanExecutor(worldModel, planner, toolRegistry.toExecutor(), { postconditionWaitMs: learningEngine.getAdaptiveBudget(worldModel.getState().focusedApp?.bundleId ?? "unknown").verifyMs }, recoveryEngine, learningEngine);
+  const result = await executor.executeGoal(goal);
+  goalStore.update(goalId, goal);
+
+  // Check if paused at an LLM step
+  if ("paused" in result) {
+    const pause = result as ExecutionPause;
+    return {
+      content: [{ type: "text" as const, text: [
+        `PAUSED at step ${pause.stepIndex + 1}/${pause.totalSteps} — requires your interpretation.`,
+        `Step: ${pause.stepDescription}`,
+        "",
+        "Use plan_step_resolve to provide the tool + params for this step,",
+        "then call plan_execute again to continue.",
+      ].join("\n") }],
+      _meta: { goalId, paused: true, stepIndex: pause.stepIndex },
+    };
+  }
+
+  // Completed — save strategy to memory if successful
+  if (result.success) {
+    try {
+      const sg = goal.subgoals.find((s) => s.status === "completed");
+      if (sg?.plan) {
+        const steps = sg.plan.steps
+          .filter((s) => s.status === "completed" && s.tool)
+          .map((s) => ({ tool: s.tool, params: s.params }));
+        if (steps.length > 0) {
+          memory.appendStrategy({
+            id: "str_plan_" + Date.now().toString(36),
+            task: goal.description,
+            steps,
+            totalDurationMs: result.durationMs,
+            successCount: 1,
+            failCount: 0,
+            lastUsed: new Date().toISOString(),
+            tags: ["auto-plan", sg.plan.source],
+            fingerprint: "",
+          });
+        }
+      }
+    } catch { /* strategy recording is best-effort */ }
+  }
+
+  const lines = [
+    result.success ? "Goal completed successfully." : `Goal failed: ${result.error}`,
+    `Steps: ${result.stepsExecuted} executed, ${result.replans} replans`,
+    `Duration: ${result.durationMs}ms`,
+    `Subgoals: ${result.subgoalsCompleted}/${result.totalSubgoals} completed`,
+  ];
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("plan_step", "Execute the next single step of a goal. For incremental client-driven execution. Returns the step result, or pauses at LLM steps for you to interpret.", {
+  goalId: z.string().describe("Goal ID from plan_goal"),
+}, async ({ goalId }) => {
+  const goal = goalStore.get(goalId);
+  if (!goal) {
+    return { content: [{ type: "text" as const, text: `Goal not found: ${goalId}` }] };
+  }
+
+  const executor = new PlanExecutor(worldModel, planner, toolRegistry.toExecutor(), { postconditionWaitMs: learningEngine.getAdaptiveBudget(worldModel.getState().focusedApp?.bundleId ?? "unknown").verifyMs }, recoveryEngine, learningEngine);
+  const result = await executor.executeNextStep(goal);
+  goalStore.update(goalId, goal);
+
+  if ("paused" in result) {
+    const pause = result as ExecutionPause;
+    return {
+      content: [{ type: "text" as const, text: [
+        `Step ${pause.stepIndex + 1}/${pause.totalSteps} requires LLM interpretation:`,
+        `  ${pause.stepDescription}`,
+        "",
+        "Use plan_step_resolve to provide tool + params, or execute the step yourself and call plan_step again.",
+      ].join("\n") }],
+    };
+  }
+
+  if ("goalId" in result) {
+    // PlanResult — goal completed
+    return {
+      content: [{ type: "text" as const, text: result.success
+        ? `Goal completed: ${result.subgoalsCompleted}/${result.totalSubgoals} subgoals done.`
+        : `Goal failed: ${result.error}` }],
+    };
+  }
+
+  // StepResult
+  const sr = result;
+  return {
+    content: [{ type: "text" as const, text: [
+      sr.success ? `Step completed: ${sr.step.tool}` : `Step failed: ${sr.error}`,
+      `Duration: ${sr.durationMs}ms`,
+      sr.usedFallback ? "(used fallback tool)" : "",
+      sr.postconditionMet ? "" : "Warning: postcondition not met",
+    ].filter(Boolean).join("\n") }],
+  };
+});
+
+originalTool("plan_step_resolve", "Resolve a paused LLM step by providing the tool and params to use. The server executes the tool, verifies postconditions, and advances the plan.", {
+  goalId: z.string().describe("Goal ID"),
+  tool: z.string().describe("MCP tool name to execute for this step"),
+  params: z.record(z.string(), z.unknown()).optional().describe("Tool parameters"),
+}, async ({ goalId, tool, params }) => {
+  const goal = goalStore.get(goalId);
+  if (!goal) {
+    return { content: [{ type: "text" as const, text: `Goal not found: ${goalId}` }] };
+  }
+
+  const executor = new PlanExecutor(worldModel, planner, toolRegistry.toExecutor(), { postconditionWaitMs: learningEngine.getAdaptiveBudget(worldModel.getState().focusedApp?.bundleId ?? "unknown").verifyMs }, recoveryEngine, learningEngine);
+  const result = await executor.resolveStep(goal, tool, params ?? {});
+  goalStore.update(goalId, goal);
+
+  return {
+    content: [{ type: "text" as const, text: result.success
+      ? `Step resolved and completed: ${tool}`
+      : `Step failed: ${result.error}` }],
+  };
+});
+
+originalTool("plan_status", "Check the current status of a goal: subgoal progress, current step, completion state.", {
+  goalId: z.string().describe("Goal ID"),
+}, async ({ goalId }) => {
+  const goal = goalStore.get(goalId);
+  if (!goal) {
+    return { content: [{ type: "text" as const, text: `Goal not found: ${goalId}` }] };
+  }
+
+  const lines = [
+    `Goal: ${goal.description}`,
+    `Status: ${goal.status}`,
+    `Created: ${goal.createdAt}`,
+    goal.completedAt ? `Completed: ${goal.completedAt}` : "",
+    "",
+  ].filter(Boolean);
+
+  for (let i = 0; i < goal.subgoals.length; i++) {
+    const sg = goal.subgoals[i]!;
+    const plan = sg.plan;
+    const progress = plan
+      ? `${plan.currentStepIndex}/${plan.steps.length} steps`
+      : "no plan";
+    lines.push(`  Subgoal ${i + 1}: ${sg.status} (${progress}, ${sg.attempts} attempts)`);
+    if (sg.lastError) lines.push(`    Error: ${sg.lastError}`);
+  }
+
+  if (goal.pausedAt) {
+    lines.push("", `Paused at: subgoal ${goal.pausedAt.subgoalIndex + 1}, step ${goal.pausedAt.stepIndex + 1}`);
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("plan_list", "List all goals (active, completed, failed). Optionally filter by status.", {
+  status: z.string().optional().describe("Filter by status: pending, active, completed, failed"),
+}, async ({ status }) => {
+  const goals = status
+    ? goalStore.list(status as any)
+    : goalStore.list();
+
+  if (goals.length === 0) {
+    return { content: [{ type: "text" as const, text: "No goals found." }] };
+  }
+
+  const lines = goals.map((g) => {
+    const sgDone = g.subgoals.filter((s) => s.status === "completed").length;
+    return `  ${g.id}: ${g.status} — "${g.description}" (${sgDone}/${g.subgoals.length} subgoals, ${g.createdAt})`;
+  });
+
+  return { content: [{ type: "text" as const, text: [`${goals.length} goal(s):`, ...lines].join("\n") }] };
+});
+
+// ═══════════════════════════════════════════════
+// PERCEPTION + WORLD MODEL — continuous state tracking
+// ═══════════════════════════════════════════════
+
+originalTool("perception_status", "Get continuous perception status: multi-rate loop stats, freshness of AX/CDP/vision sources, and event counts.", {
+}, async () => {
+  const stats = perceptionManager.getStats();
+  const freshness = perceptionManager.getFreshnessSummary();
+
+  const lines = [
+    freshness,
+    `Running: ${perceptionManager.isRunning}`,
+  ];
+
+  if (stats.started) {
+    lines.push(`Started: ${stats.startedAt}`);
+    lines.push("");
+    const pcConfig = perceptionManager.getConfig();
+    lines.push("Loop cycles:");
+    lines.push(`  Fast  (${pcConfig?.fastIntervalMs ?? 100}ms): ${stats.fastCycles} cycles`);
+    lines.push(`  Medium (${pcConfig?.mediumIntervalMs ?? 500}ms): ${stats.mediumCycles} cycles`);
+    lines.push(`  Slow  (${pcConfig?.slowIntervalMs ?? 2000}ms): ${stats.slowCycles} cycles`);
+    lines.push("");
+    lines.push("Events processed:");
+    lines.push(`  AX events: ${stats.axEventsProcessed}`);
+    lines.push(`  AX tree polls: ${stats.axTreePolls}`);
+    lines.push(`  CDP mutations: ${stats.cdpMutationsProcessed}`);
+    lines.push(`  CDP snapshots: ${stats.cdpSnapshots}`);
+    lines.push(`  Vision diffs: ${stats.visionDiffs}`);
+    lines.push(`  Vision OCRs: ${stats.visionOCRs}`);
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("world_state", "Get the current world model state: focused app, window/control counts, active dialogs, and last scan age.", {
+}, async () => {
+  const state = worldModel.getState();
+  const summary = worldModel.toSummary();
+  const focused = worldModel.getFocusedWindow();
+  const dialogs = worldModel.getActiveDialogs();
+
+  const lines = [summary];
+  if (focused) {
+    lines.push(`\nFocused window: "${focused.title.value}" (id=${focused.windowId}, ${focused.controls.size} controls, confidence=${focused.title.confidence.toFixed(2)})`);
+  }
+  if (dialogs.length > 0) {
+    lines.push("\nActive dialogs:");
+    for (const d of dialogs) {
+      lines.push(`  - ${d.type}: "${d.title}" (${d.controls.size} controls, detected ${d.detectedAt})`);
+    }
+  }
+  lines.push(`\nSession: ${state.sessionId || "(not initialized)"}`);
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("world_state_diff", "Get stale UI controls that haven't been refreshed within a threshold. Useful for finding controls whose state may be outdated.", {
+  thresholdMs: z.number().optional().describe("Stale threshold in ms (default: 5 minutes)"),
+}, async ({ thresholdMs }) => {
+  const stale = worldModel.getStaleControls(thresholdMs);
+  if (stale.length === 0) {
+    return { content: [{ type: "text" as const, text: "No stale controls — all state is fresh." }] };
+  }
+  const lines = [`${stale.length} stale control(s):`];
+  for (const c of stale.slice(0, 20)) {
+    const age = Math.round((Date.now() - new Date(c.value.updatedAt).getTime()) / 1000);
+    lines.push(`  ${c.stableId} ${c.role} "${c.label.value}" — ${age}s old`);
+  }
+  if (stale.length > 20) lines.push(`  ... and ${stale.length - 20} more`);
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("learning_status", "Get learning engine stats: locator preferences, recovery strategy rankings, adaptive budgets, and sensor preferences for a given app.", {
+  bundleId: z.string().optional().describe("App bundle ID to query (default: currently focused app)"),
+}, async ({ bundleId }: { bundleId?: string | undefined }) => {
+  const bid = bundleId ?? worldModel.getState().focusedApp?.bundleId ?? "unknown";
+  const summary = learningEngine.getAppSummary(bid);
+
+  const lines = [
+    `Learning stats for ${bid}:`,
+    `  Locator entries: ${summary.locatorEntries}`,
+    `  Recovery entries: ${summary.recoveryEntries}`,
+    `  Timing samples: ${summary.timingSamples}`,
+    `  Sensor entries: ${summary.sensorEntries}`,
+  ];
+
+  if (summary.topLocatorMethod) {
+    lines.push(`  Best locator method: ${summary.topLocatorMethod}`);
+  }
+  if (summary.topSensor) {
+    lines.push(`  Best sensor: ${summary.topSensor}`);
+  }
+
+  lines.push("");
+  lines.push("Adaptive budgets:");
+  lines.push(`  Locate: ${summary.adaptiveBudget.locateMs}ms`);
+  lines.push(`  Act: ${summary.adaptiveBudget.actMs}ms`);
+  lines.push(`  Verify: ${summary.adaptiveBudget.verifyMs}ms`);
+
+  const sensors = learningEngine.rankSensors(bid);
+  if (sensors.length > 0) {
+    lines.push("");
+    lines.push("Sensor ranking:");
+    for (const s of sensors) {
+      lines.push(`  ${s.sourceType}: score=${s.score.toFixed(3)}, avg=${Math.round(s.avgLatencyMs)}ms`);
+    }
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+// ── Perception lifecycle ──
+
+originalTool("perception_start", "Start continuous perception for the currently focused app. Begins multi-rate AX/CDP/vision polling loop.", {
+}, async () => {
+  const app = worldModel.getState().focusedApp;
+  if (!app) {
+    return { content: [{ type: "text" as const, text: "Error: No focused app. Focus an app first." }] };
+  }
+  await ensureBridge();
+  await perceptionManager.ensureStarted({ bundleId: app.bundleId, appName: app.appName, pid: app.pid, windowTitle: "" });
+  return { content: [{ type: "text" as const, text: `Perception started for ${app.bundleId} (${app.appName})` }] };
+});
+
+originalTool("perception_stop", "Stop continuous perception loop.", {
+}, async () => {
+  await perceptionManager.stop();
+  return { content: [{ type: "text" as const, text: "Perception stopped." }] };
+});
+
+// ── Plan lifecycle ──
+
+originalTool("plan_cancel", "Cancel an active goal, marking it as failed.", {
+  goalId: z.string().describe("Goal ID to cancel"),
+}, async ({ goalId }: { goalId: string }) => {
+  const goal = goalStore.get(goalId);
+  if (!goal) {
+    return { content: [{ type: "text" as const, text: `Goal not found: ${goalId}` }] };
+  }
+  goal.status = "failed";
+  goal.completedAt = new Date().toISOString();
+  goalStore.update(goalId, goal);
+  return { content: [{ type: "text" as const, text: `Goal cancelled: ${goalId}` }] };
+});
+
+// ── Recovery status + configure ──
+
+originalTool("recovery_status", "Get recovery engine status: cooldowns, reference cache, learning engine connection.", {
+}, async () => {
+  const status = recoveryEngine.getStatus();
+  const lines = [
+    "Recovery Engine Status:",
+    `  Active cooldowns: ${status.cooldownCount}`,
+    `  Reference cache entries: ${status.referenceCacheSize}`,
+    `  Learning engine connected: ${status.learningEngineConnected}`,
+  ];
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("recovery_configure", "Update recovery engine default budget configuration.", {
+  maxRecoveryTimeMs: z.number().optional().describe("Max time for recovery attempts in ms"),
+  maxStrategies: z.number().optional().describe("Max number of strategies to try"),
+}, async ({ maxRecoveryTimeMs, maxStrategies }: { maxRecoveryTimeMs?: number | undefined; maxStrategies?: number | undefined }) => {
+  const updates: Record<string, unknown> = {};
+  if (maxRecoveryTimeMs !== undefined) updates.maxRecoveryTimeMs = maxRecoveryTimeMs;
+  if (maxStrategies !== undefined) updates.maxStrategies = maxStrategies;
+  recoveryEngine.configure(updates as any);
+  return { content: [{ type: "text" as const, text: `Recovery config updated: ${JSON.stringify(updates)}` }] };
+});
+
+// ── Learning lifecycle ──
+
+originalTool("learning_reset", "Clear ALL learning data (locators, recovery, timing, sensors). Requires confirm=true.", {
+  confirm: z.boolean().describe("Must be true to proceed"),
+}, async ({ confirm }: { confirm: boolean }) => {
+  if (!confirm) {
+    return { content: [{ type: "text" as const, text: "Aborted: set confirm=true to clear all learning data." }] };
+  }
+  learningEngine.reset();
+  return { content: [{ type: "text" as const, text: "All learning data cleared and flushed to disk." }] };
 });
 
 // ═══════════════════════════════════════════════
@@ -3425,15 +4150,287 @@ server.tool("observer_status", "Get observer daemon status — frames captured, 
   return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 });
 
+server.tool("observer_ocr_roi", "Submit a targeted ROI OCR command to the running observer daemon. The daemon captures the window region, runs OCR, and stores the result. Non-blocking — returns a command ID you can poll with a second call.", {
+  x: z.number().describe("X offset of the region (window-relative)"),
+  y: z.number().describe("Y offset of the region (window-relative)"),
+  width: z.number().describe("Width of the region"),
+  height: z.number().describe("Height of the region"),
+  windowId: z.number().optional().describe("Window ID (defaults to daemon's watched window)"),
+  commandId: z.string().optional().describe("If provided, poll an existing command instead of submitting a new one"),
+}, async ({ x, y, width, height, windowId, commandId }) => {
+  // Poll mode — check result of a previously submitted command
+  if (commandId) {
+    const cmd = getObserverCommand(commandId);
+    if (!cmd) {
+      return { content: [{ type: "text" as const, text: `Command ${commandId} not found.` }] };
+    }
+    if (cmd.status === "pending" || cmd.status === "running") {
+      return { content: [{ type: "text" as const, text: `Command ${commandId}: ${cmd.status} — call again to poll.` }] };
+    }
+    if (cmd.status === "error") {
+      return { content: [{ type: "text" as const, text: `Command ${commandId} failed: ${cmd.error}` }] };
+    }
+    // done
+    const r = cmd.result!;
+    const lines = [
+      `Command ${commandId}: done at ${r.completedAt}`,
+      `Text: ${r.text.substring(0, 1000)}`,
+      `Regions: ${r.regions.length}`,
+    ];
+    for (const region of r.regions.slice(0, 20)) {
+      lines.push(`  "${region.text}" @ (${region.bounds.x}, ${region.bounds.y}, ${region.bounds.width}×${region.bounds.height})`);
+    }
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  }
+
+  // Submit mode — create a new command
+  const pid = getObserverDaemonPid();
+  if (!pid) {
+    return { content: [{ type: "text" as const, text: "Observer daemon not running. Use observer_start first." }] };
+  }
+
+  const cmd: Omit<import("./src/observer/types.js").ObserverCommand, "id" | "status" | "createdAt"> = {
+    type: "ocr_roi",
+    roi: { x, y, width, height },
+  };
+  if (windowId !== undefined) cmd.windowId = windowId;
+  const id = submitObserverCommand(cmd);
+
+  return { content: [{ type: "text" as const, text: `ROI OCR command submitted: ${id}\nRegion: (${x}, ${y}, ${width}×${height})\nThe daemon will process this on its next cycle. Call observer_ocr_roi with commandId="${id}" to poll the result.` }] };
+});
+
+// ═══════════════════════════════════════════════
+// PHASE 6: TOOL MASTERY — Ingestion + Community
+// ═══════════════════════════════════════════════
+
+server.tool("scan_menu_bar", "Scan an app's menu bar via AX tree. Extracts all menu paths, keyboard shortcuts, and enabled/disabled states. Automatically merges discovered shortcuts into the reference file.", {
+  pid: z.number().describe("Process ID of the running app"),
+  bundleId: z.string().describe("macOS bundle ID (e.g. com.adobe.Photoshop)"),
+  appName: z.string().describe("Human-readable app name (e.g. Photoshop)"),
+  mergeToReference: z.boolean().optional().describe("Merge discovered shortcuts into the reference file (default true)"),
+}, async ({ pid, bundleId, appName, mergeToReference }) => {
+  await ensureBridge();
+  const scanner = new MenuScanner(bridge);
+  const result = await scanner.scan(pid, bundleId, appName);
+
+  // Auto-merge to reference unless explicitly disabled
+  let mergeInfo = "";
+  if (mergeToReference !== false) {
+    const merge = referenceMerger.mergeMenuScan(result);
+    mergeInfo = `\nReference updated: ${merge.filePath} (${merge.added} added, ${merge.updated} updated)`;
+  }
+
+  const lines = [
+    `Menu scan: ${result.appName} (${result.bundleId})`,
+    `Total menus: ${result.totalMenus}, Total items: ${result.totalItems}`,
+    `Shortcuts found: ${Object.keys(result.shortcuts).length}`,
+    mergeInfo,
+    "",
+    "Shortcuts:",
+  ];
+
+  for (const [menuPath, keys] of Object.entries(result.shortcuts)) {
+    lines.push(`  ${menuPath}: ${keys}`);
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+server.tool("ingest_documentation", "Parse a documentation page (HTML, markdown, or text) and extract shortcuts, workflows, and tips. Merges extracted knowledge into the app's reference file.", {
+  content: z.string().describe("The documentation content (HTML, markdown, or plain text)"),
+  url: z.string().describe("Source URL of the documentation"),
+  format: z.enum(["html", "markdown", "text"]).optional().describe("Content format (default html)"),
+  bundleId: z.string().describe("macOS bundle ID for the app this documentation covers"),
+  appName: z.string().describe("Human-readable app name"),
+  mergeToReference: z.boolean().optional().describe("Merge extracted knowledge into reference file (default true)"),
+}, async ({ content, url, format, bundleId, appName, mergeToReference }) => {
+  const parser = new DocParser();
+  const result = parser.parse(content, url, format ?? "html");
+
+  let mergeInfo = "";
+  if (mergeToReference !== false) {
+    const shortcutMerge = referenceMerger.mergeDocShortcuts(result.shortcuts, bundleId, appName);
+    const flowMerge = referenceMerger.mergeDocFlows(result, bundleId, appName);
+    mergeInfo = `\nReference updated: ${shortcutMerge.filePath}\n  Shortcuts: ${shortcutMerge.added} added, ${shortcutMerge.updated} updated\n  Flows: ${flowMerge.added} added`;
+  }
+
+  const lines = [
+    `Documentation parsed: ${result.title}`,
+    `Source: ${result.url}`,
+    `Shortcuts: ${result.shortcuts.length}, Flows: ${result.flows.length}, Tips: ${result.tips.length}`,
+    mergeInfo,
+  ];
+
+  if (result.shortcuts.length > 0) {
+    lines.push("", "Shortcuts:");
+    for (const s of result.shortcuts.slice(0, 30)) {
+      lines.push(`  ${s.name}: ${s.keys}${s.category ? ` (${s.category})` : ""}`);
+    }
+  }
+
+  if (result.flows.length > 0) {
+    lines.push("", "Workflows:");
+    for (const f of result.flows.slice(0, 10)) {
+      lines.push(`  ${f.name} (${f.steps.length} steps)`);
+    }
+  }
+
+  if (result.tips.length > 0) {
+    lines.push("", "Tips:");
+    for (const t of result.tips.slice(0, 10)) {
+      lines.push(`  - ${t}`);
+    }
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+server.tool("ingest_tutorial", "Extract structured playbook steps from a video transcript (e.g. YouTube captions). Converts tutorial narration into actionable automation steps with tool mappings.", {
+  segments: z.array(z.object({
+    text: z.string(),
+    startTime: z.number(),
+    duration: z.number(),
+  })).describe("Transcript segments (text + timing from YouTube captions or similar)"),
+  title: z.string().describe("Video title"),
+  platform: z.string().describe("Target platform name (e.g. davinci-resolve, figma)"),
+}, async ({ segments, title, platform }) => {
+  const extractor = new TutorialExtractor();
+  const result = extractor.extract(segments as TranscriptSegment[], title, platform);
+  const playbookSteps = extractor.toPlaybookSteps(result);
+
+  const lines = [
+    `Tutorial extracted: ${result.title}`,
+    `Platform: ${result.platform}`,
+    `Raw segments: ${result.rawSegments}, Action steps: ${result.actionSegments}`,
+    `Playbook-ready steps: ${playbookSteps.length}`,
+    "",
+    "Steps:",
+  ];
+
+  for (let i = 0; i < result.steps.length; i++) {
+    const step = result.steps[i]!;
+    lines.push(`  ${i + 1}. [${step.tool ?? "?"}] ${step.description}`);
+  }
+
+  return {
+    content: [{
+      type: "text" as const,
+      text: lines.join("\n"),
+    }],
+  };
+});
+
+server.tool("coverage_report", "Generate a coverage report for an app — shows what knowledge we have (shortcuts, selectors, flows, playbooks, errors) and identifies gaps with recommendations.", {
+  bundleId: z.string().describe("macOS bundle ID (e.g. com.blackmagic-design.DaVinciResolveLite)"),
+  appName: z.string().describe("Human-readable app name"),
+  includeLiveMenuScan: z.boolean().optional().describe("Also scan the live menu bar for comparison (requires app to be running, needs pid)"),
+  pid: z.number().optional().describe("Process ID (required if includeLiveMenuScan is true)"),
+}, async ({ bundleId, appName, includeLiveMenuScan, pid }) => {
+  let menuScan;
+  if (includeLiveMenuScan && pid) {
+    await ensureBridge();
+    const scanner = new MenuScanner(bridge);
+    menuScan = await scanner.scan(pid, bundleId, appName);
+  }
+
+  const report = coverageAuditor.audit(bundleId, appName, menuScan);
+
+  const lines = [
+    `Coverage Report: ${report.app} (${report.bundleId})`,
+    "",
+    "Knowledge inventory:",
+    `  Shortcuts: ${report.shortcutsKnown}`,
+    `  Selectors: ${report.selectorsKnown}`,
+    `  Flows: ${report.flowsKnown}`,
+    `  Playbooks: ${report.playbooksAvailable}`,
+    `  Error patterns: ${report.errorsDocumented}`,
+  ];
+
+  if (report.selectorStabilityScore > 0) {
+    lines.push(`  Selector stability: ${(report.selectorStabilityScore * 100).toFixed(0)}%`);
+  }
+
+  if (report.highValueGaps.length > 0) {
+    lines.push("", "High-value gaps:");
+    for (const gap of report.highValueGaps) {
+      lines.push(`  - ${gap}`);
+    }
+  }
+
+  if (report.shortcutsNotInReference.length > 0) {
+    lines.push("", `Undocumented shortcuts (${report.shortcutsNotInReference.length}):`);
+    for (const s of report.shortcutsNotInReference.slice(0, 20)) {
+      lines.push(`  ${s}`);
+    }
+  }
+
+  if (report.workflowsWithNoPlaybook.length > 0) {
+    lines.push("", `Missing playbooks for common workflows: ${report.workflowsWithNoPlaybook.join(", ")}`);
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
+originalTool("community_publish", "Publish a validated local playbook to the community repository. Requires the playbook to have been executed successfully multiple times. Strips sensitive data (passwords, file paths).", {
+  playbookId: z.string().describe("ID of the local playbook to publish"),
+  successRate: z.number().min(0).max(1).describe("Success rate from testing (0.0-1.0)"),
+  executionCount: z.number().describe("Number of times the playbook has been executed"),
+  minRuns: z.number().optional().describe("Minimum successful runs required (default 3)"),
+}, async ({ playbookId, successRate, executionCount, minRuns }) => {
+  // Look up the playbook from the store
+  const playbook = _playbookStoreForContext.get(playbookId);
+  if (!playbook) {
+    return { content: [{ type: "text" as const, text: `Playbook "${playbookId}" not found. Use export_playbook to list available playbooks.` }] };
+  }
+
+  const result = communityPublisher.publish(playbook, successRate, executionCount, minRuns);
+  if (!result) {
+    return { content: [{ type: "text" as const, text: `Playbook not published. Requirements: at least ${minRuns ?? 3} executions and >50% success rate. Current: ${executionCount} runs, ${(successRate * 100).toFixed(0)}% success.` }] };
+  }
+
+  communityFetcher.invalidateCache();
+  return { content: [{ type: "text" as const, text: `Published to community: ${result.id}\nName: ${result.name}\nSteps: ${result.steps.length}\nSuccess rate: ${(result.metadata.successRate * 100).toFixed(0)}%` }] };
+});
+
+originalTool("community_fetch", "Search community playbooks for a platform or workflow. Returns ranked results by success rate.", {
+  platform: z.string().optional().describe("Filter by platform name"),
+  bundleId: z.string().optional().describe("Filter by macOS bundle ID"),
+  workflow: z.string().optional().describe("Search by workflow name/description"),
+  limit: z.number().optional().describe("Max results (default 20)"),
+}, async ({ platform, bundleId, workflow, limit }) => {
+  const query: import("./src/community/types.js").PlaybookQuery = {};
+  if (platform !== undefined) query.platform = platform;
+  if (bundleId !== undefined) query.bundleId = bundleId;
+  if (workflow !== undefined) query.workflow = workflow;
+  if (limit !== undefined) query.limit = limit;
+  const results = communityFetcher.fetch(query);
+
+  if (results.length === 0) {
+    return { content: [{ type: "text" as const, text: "No community playbooks found matching the query." }] };
+  }
+
+  const lines = [`Community playbooks (${results.length} results):`, ""];
+  for (const pb of results) {
+    lines.push(`  ${pb.id}`);
+    lines.push(`    Name: ${pb.name}`);
+    lines.push(`    Platform: ${pb.platform} | Steps: ${pb.steps.length}`);
+    lines.push(`    Success: ${(pb.metadata.successRate * 100).toFixed(0)}% (${pb.metadata.executionCount} runs)`);
+    lines.push(`    Score: ${pb.ratings.score} | By: ${pb.metadata.author}`);
+    lines.push("");
+  }
+
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+});
+
 // ═══════════════════════════════════════════════
 // START
 // ═══════════════════════════════════════════════
 
 async function main() {
   // Flush playbook learnings on graceful shutdown
-  process.on("SIGINT", () => { contextTracker.flush(); process.exit(0); });
-  process.on("SIGTERM", () => { contextTracker.flush(); process.exit(0); });
-  process.on("beforeExit", () => { contextTracker.flush(); });
+  process.on("SIGINT", () => { void perceptionManager.stop(); contextTracker.flush(); learningEngine.flush(); process.exit(0); });
+  process.on("SIGTERM", () => { void perceptionManager.stop(); contextTracker.flush(); learningEngine.flush(); process.exit(0); });
+  process.on("beforeExit", () => { void perceptionManager.stop(); contextTracker.flush(); learningEngine.flush(); });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

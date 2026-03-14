@@ -1,0 +1,76 @@
+{
+  "id": "google-search-competitor-research",
+  "name": "Google Search — Competitor Discovery",
+  "description": "Open a Google Search results page and extract the top visible competitor headings and result domains.",
+  "platform": "google-search-competitor-research",
+  "version": "1.0.0",
+  "urlPatterns": [
+    "*google.com/search*"
+  ],
+  "tags": [
+    "google",
+    "search",
+    "competitor-research",
+    "browser",
+    "cdp"
+  ],
+  "successCount": 0,
+  "failCount": 0,
+  "urls": {
+    "search": "https://www.google.com/search?q={QUERY}"
+  },
+  "selectors": {
+    "search": {
+      "query_field": "textarea#APjFqb"
+    },
+    "results": {
+      "headings": "h3",
+      "links": "a[href]"
+    }
+  },
+  "flows": {
+    "market_query": {
+      "steps": [
+        "Open a direct search URL",
+        "Read the top headings and associated domains",
+        "Use repeated brand presence across multiple queries as a signal"
+      ],
+      "why": "Search is the fastest way to discover who owns the category language before validating paid inventory."
+    }
+  },
+  "detection": {
+    "on_search": "location.hostname.includes('google.com') && location.pathname === '/search'"
+  },
+  "errors": [
+    {
+      "error": "Google result layouts vary",
+      "context": "AI Overviews and media modules can change the page structure",
+      "solution": "Extract visible headings and domains rather than assuming exact result positions.",
+      "severity": "medium"
+    }
+  ],
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://www.google.com/search?q={QUERY}",
+      "description": "Open the market search query",
+      "verify": "textarea#APjFqb",
+      "verifyTimeoutMs": 15000
+    },
+    {
+      "action": "wait",
+      "ms": 1500,
+      "description": "Wait for results to render"
+    },
+    {
+      "action": "browser_js",
+      "code": "(() => { const headings = [...document.querySelectorAll('h3')].map((el) => (el.textContent || '').trim()).filter(Boolean).slice(0, 10); const links = [...document.querySelectorAll('a[href]')].map((el) => ({ text: (el.textContent || '').trim(), href: el.href })).filter((item) => item.text || item.href.includes('/url?')).slice(0, 20); return { query: `{QUERY}`, url: location.href, headings, links }; })()",
+      "description": "Extract the top visible headings and result links"
+    },
+    {
+      "action": "screenshot",
+      "description": "Capture the search results page",
+      "optional": true
+    }
+  ]
+}

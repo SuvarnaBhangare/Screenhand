@@ -23,9 +23,9 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { BridgeClient } from "../src/native/bridge-client.js";
-import { writeObserverState } from "../src/observer/state.js";
+import { writeObserverState, readObserverCommands, writeObserverCommands, acquireCaptureLock, releaseCaptureLock } from "../src/observer/state.js";
 import { detectPopup } from "../src/observer/state.js";
-import type { ObserverState, ObserverFrame } from "../src/observer/types.js";
+import type { ObserverState, ObserverFrame, ObserverCommand } from "../src/observer/types.js";
 import { OBSERVER_DIR, OBSERVER_PID_FILE, OBSERVER_LOG_FILE } from "../src/observer/types.js";
 
 // ── Config from CLI args ──
@@ -127,68 +127,137 @@ function persistState(): void {
 // ── Capture loop ──
 
 async function captureFrame(): Promise<void> {
-  await ensureBridge();
-
-  // 1. Capture window (app-level, not full screen)
-  let shot: { path: string; width: number; height: number };
-  try {
-    shot = await bridge.call<{ path: string; width: number; height: number }>(
-      "cg.captureWindow",
-      { windowId: WINDOW_ID },
-    );
-  } catch (err) {
-    lastError = `Capture failed: ${err instanceof Error ? err.message : String(err)}`;
+  // Acquire capture lock to prevent concurrent captures with perception coordinator
+  if (!acquireCaptureLock()) {
+    log("Skipping capture — lock held by perception coordinator");
     return;
   }
 
-  framesCaptured++;
+  try {
+    await ensureBridge();
 
-  // 2. Frame diff — hash the image file, skip OCR if identical
-  const currentHash = hashFile(shot.path);
-  const pixelsChanged = currentHash !== lastFrameHash;
-  lastFrameHash = currentHash;
-
-  if (!pixelsChanged) {
-    // Frame identical — update timestamp only, skip expensive OCR
-    if (lastFrame) {
-      lastFrame.capturedAt = new Date().toISOString();
-      lastFrame.changed = false;
+    // 1. Capture window (app-level, not full screen)
+    let shot: { path: string; width: number; height: number };
+    try {
+      shot = await bridge.call<{ path: string; width: number; height: number }>(
+        "cg.captureWindow",
+        { windowId: WINDOW_ID },
+      );
+    } catch (err) {
+      lastError = `Capture failed: ${err instanceof Error ? err.message : String(err)}`;
+      return;
     }
-    return;
+
+    framesCaptured++;
+
+    // 2. Frame diff — hash the image file, skip OCR if identical
+    const currentHash = hashFile(shot.path);
+    const pixelsChanged = currentHash !== lastFrameHash;
+    lastFrameHash = currentHash;
+
+    if (!pixelsChanged) {
+      // Frame identical — update timestamp only, skip expensive OCR
+      if (lastFrame) {
+        lastFrame.capturedAt = new Date().toISOString();
+        lastFrame.changed = false;
+      }
+      return;
+    }
+
+    framesChanged++;
+
+    // 3. OCR only on changed frames
+    let ocrText = "";
+    try {
+      const ocr = await bridge.call<{ text: string }>("vision.ocr", {
+        imagePath: shot.path,
+      });
+      ocrText = ocr.text;
+      ocrRuns++;
+    } catch (err) {
+      lastError = `OCR failed: ${err instanceof Error ? err.message : String(err)}`;
+      ocrText = lastFrame?.ocrText ?? "";
+    }
+
+    // 4. Update frame
+    lastFrame = {
+      capturedAt: new Date().toISOString(),
+      ocrText,
+      changed: true,
+    };
+
+    // 5. Popup detection on the new OCR text
+    lastPopup = detectPopup(ocrText);
+    if (lastPopup) {
+      log(`Popup detected: "${lastPopup.pattern}" → ${lastPopup.dismissAction}`);
+    }
+
+    lastError = null;
+
+    // Clean up temp screenshot
+    try { fs.unlinkSync(shot.path); } catch { /* ignore */ }
+  } finally {
+    releaseCaptureLock();
   }
+}
 
-  framesChanged++;
+// ── Command processing ──
 
-  // 3. OCR only on changed frames
-  let ocrText = "";
+async function processCommands(): Promise<void> {
+  let commands: ObserverCommand[];
   try {
-    const ocr = await bridge.call<{ text: string }>("vision.ocr", {
-      imagePath: shot.path,
-    });
-    ocrText = ocr.text;
-    ocrRuns++;
-  } catch (err) {
-    lastError = `OCR failed: ${err instanceof Error ? err.message : String(err)}`;
-    ocrText = lastFrame?.ocrText ?? "";
+    commands = readObserverCommands();
+  } catch {
+    return; // No commands file or corrupt — skip
   }
 
-  // 4. Update frame
-  lastFrame = {
-    capturedAt: new Date().toISOString(),
-    ocrText,
-    changed: true,
-  };
+  const pending = commands.filter((c) => c.status === "pending");
+  if (pending.length === 0) return;
 
-  // 5. Popup detection on the new OCR text
-  lastPopup = detectPopup(ocrText);
-  if (lastPopup) {
-    log(`Popup detected: "${lastPopup.pattern}" → ${lastPopup.dismissAction}`);
+  let changed = false;
+
+  for (const cmd of pending) {
+    if (cmd.type !== "ocr_roi") {
+      cmd.status = "error";
+      cmd.error = `Unknown command type: ${cmd.type}`;
+      changed = true;
+      continue;
+    }
+
+    cmd.status = "running";
+    changed = true;
+
+    try {
+      await ensureBridge();
+      const targetWindowId = cmd.windowId ?? WINDOW_ID;
+
+      // Use vision.ocrRegion for targeted ROI OCR
+      const result = await bridge.call<{
+        text: string;
+        regions: Array<{ text: string; bounds: { x: number; y: number; width: number; height: number } }>;
+      }>("vision.ocrRegion", {
+        windowId: targetWindowId,
+        region: cmd.roi,
+      });
+
+      cmd.status = "done";
+      cmd.result = {
+        text: result.text ?? "",
+        regions: result.regions ?? [],
+        completedAt: new Date().toISOString(),
+      };
+      ocrRuns++;
+      log(`Command ${cmd.id}: OCR ROI completed (${cmd.result.regions.length} regions)`);
+    } catch (err) {
+      cmd.status = "error";
+      cmd.error = err instanceof Error ? err.message : String(err);
+      log(`Command ${cmd.id}: failed — ${cmd.error}`);
+    }
   }
 
-  lastError = null;
-
-  // Clean up temp screenshot
-  try { fs.unlinkSync(shot.path); } catch { /* ignore */ }
+  if (changed) {
+    writeObserverCommands(commands);
+  }
 }
 
 // ── Main loop ──
@@ -222,6 +291,7 @@ async function main() {
   while (!stopped) {
     try {
       await captureFrame();
+      await processCommands();
       persistState();
     } catch (err) {
       lastError = `Frame error: ${err instanceof Error ? err.message : String(err)}`;
