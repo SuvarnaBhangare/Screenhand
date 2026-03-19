@@ -85,10 +85,19 @@ doc_events = {
 	"Attendance": {
 		"validate": ["overtime.overtime.attendance_custom.calculate_ot_hrs",
 		"overtime.overtime.attendance_custom.calculate_ot_amount"]
+	},
+	"Project" : {
+		"validate" : ["overtime.overtime.project_custom.update_amount","overtime.overtime.project_custom.update_stock_amount",
+                "overtime.overtime.project_custom.update_journal_amount" ]
 		
 		
 	}
+
+	
+
 }
+
+
 
 
 # Scheduled Tasks

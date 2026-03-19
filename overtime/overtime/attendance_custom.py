@@ -4,6 +4,7 @@ def calculate_ot_hrs(doc,method):
   ot_hours = 0.0;
   ot_hours = (doc.overtime_in_minutes/60.00);
   doc.overtime_in_hours=ot_hours
+  frappe.msgprint("sucess")
     
     
 def calculate_ot_amount(doc,method):
